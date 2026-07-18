@@ -1,0 +1,55 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Python bytecode and package artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Testing, linting, and coverage
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# VS Code user-specific settings
+.vscode/
+
+# Raw and generated data
+data/raw/*
+data/interim/*
+data/processed/*
+
+# Preserve directory structure and documentation
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+!data/**/README.md
+
+# Generated reports and figures
+reports/figures/*
+!reports/figures/.gitkeep
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
