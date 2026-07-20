@@ -8,7 +8,9 @@ version = "0.1.0"
 description = "Which reserving method gives the most accurate out-of-sample ultimate-loss predictions and the most reliable uncertainty intervals across different insurance lines?"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    'pandas>=2.2,<4'
+]
 
 [project.optional-dependencies]
 dev = [

@@ -1,7 +1,6 @@
 # Project Name
 
-Brief description of the project and its objective.
-
+First Research Objective: Using only the information available at December 31, 2007, estimate each insurer's future private-passenger-auto payments through development lag 10.
 ## Repository structure
 
 - `src/`: reusable Python code
