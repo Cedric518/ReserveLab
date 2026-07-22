@@ -72,10 +72,6 @@ clean['is_observed_at_2007'] = (
     clean['development_year'] <= VALUATION_YEAR
 )
 
-clean = clean.loc[
-    clean['is_observed_at_2007']
-]
-
 clean['reported_unpaid_reserve'] = (
     clean['reported_incurred'] - clean['cumulative_paid']
 )
@@ -126,81 +122,4 @@ clean.to_csv(
 print('\nClean data saved to:')
 print(CLEAN_CSV_PATH)
 
-
-
-
-# EXAMPLE_COMPANY_CODE = 43
-# EXAMPLE_ACCIDENT_YEAR = 2005
-
-# EXAMPLE_COLUMNS = [
-#     "company_code",
-#     "company_name",
-#     "accident_year",
-#     "development_year",
-#     "development_lag",
-#     "cumulative_paid",
-#     "incremental_paid",
-#     "reported_incurred",
-#     "reported_unpaid_reserve",
-#     "reported_case_reserve",
-#     "bulk_ibnr_reserve",
-#     "is_observed_at_2007",
-# ]
-
-# example_cohort_mask = (
-#     (
-#         clean['company_code']
-#         == EXAMPLE_COMPANY_CODE
-#     )
-#     & (
-#         clean['accident_year']
-#         == EXAMPLE_ACCIDENT_YEAR
-#     )
-# )
-
-# example_cohort = clean.loc[example_cohort_mask, EXAMPLE_COLUMNS]
-
-# print("\n=== EXAMPLE CLEAN COHORT ===")
-# print(
-#     example_cohort.to_string(index=False)
-# )
-
-# print('\nHW1')
-# clean['is_future_holdout'] = (
-#     clean['development_year'] > 2007
-# )
-
-# print(clean.loc[:,'is_future_holdout'])
-
-
-# print('\nHW2')
-# same = (
-#     clean['development_year'] == clean['is_observed_at_2007']
-# )
-# print(int(same.sum()))
-
-# print('\nHW3')
-# clean = clean.sort_values(by='development_lag').copy()
-# print(clean)
-
-# homework_cohort_mask = (
-#     (clean['company_code == 43'])
-#     & (clean['accident_year=2005'])
-# )
-
-# homework_columns = [
-#     'development_year',
-#     'development_lag',
-#     'cumulative_paid',
-#     'incremental_paid',
-#     'reported_unpaid_reserve',
-#     'is_observed_at_2007',
-# ]
-
-# homework_cohort = (
-#     clean.loc[
-#     homework_cohort_mask,
-#     homework_columns
-#     ]
-#     .sort_values('development_lag')
-# )
+#raw -> clean
