@@ -28,10 +28,6 @@ BASE_COLUMNS = [
     "posted_reserve_2007",
 ]
 
-# CLEAN_CSV_PATH = (
-#     INTERIM_DIRECTORY
-#     / 'ppauto_loss_development_clean.csv'
-# )
 raw = pd.read_csv(RAW_CSV_PATH)
 clean = raw.copy()
 
@@ -121,13 +117,6 @@ clean["has_negative_reported_unpaid"] = (
 clean["has_negative_reported_case_reserve"] = (
     clean["reported_case_reserve"] < 0
 )
-print("\n=== QUALITY FLAG COUNTS ===")
-
-QUALITY_FLAG_COLUMNS = [
-    "has_negative_incremental_paid",
-    "has_negative_reported_unpaid",
-    "has_negative_reported_case_reserve",
-]
 
 clean.to_csv(
     CLEAN_CSV_PATH,
@@ -136,6 +125,7 @@ clean.to_csv(
 
 print('\nClean data saved to:')
 print(CLEAN_CSV_PATH)
+
 
 
 
@@ -175,4 +165,42 @@ print(CLEAN_CSV_PATH)
 #     example_cohort.to_string(index=False)
 # )
 
+# print('\nHW1')
+# clean['is_future_holdout'] = (
+#     clean['development_year'] > 2007
+# )
 
+# print(clean.loc[:,'is_future_holdout'])
+
+
+# print('\nHW2')
+# same = (
+#     clean['development_year'] == clean['is_observed_at_2007']
+# )
+# print(int(same.sum()))
+
+# print('\nHW3')
+# clean = clean.sort_values(by='development_lag').copy()
+# print(clean)
+
+# homework_cohort_mask = (
+#     (clean['company_code == 43'])
+#     & (clean['accident_year=2005'])
+# )
+
+# homework_columns = [
+#     'development_year',
+#     'development_lag',
+#     'cumulative_paid',
+#     'incremental_paid',
+#     'reported_unpaid_reserve',
+#     'is_observed_at_2007',
+# ]
+
+# homework_cohort = (
+#     clean.loc[
+#     homework_cohort_mask,
+#     homework_columns
+#     ]
+#     .sort_values('development_lag')
+# )
