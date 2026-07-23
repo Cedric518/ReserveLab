@@ -79,6 +79,9 @@ loss_triangle.to_csv(
 )
 print(f'Loss triangle of {COMPANY_CODE} of valudation year {VALUATION_YEAR} saved to: \n{LOSS_TRIANGLE_PATH}')
 
+#print('\n===TEST====')
+#print(loss_triangle.index)
+
 PROCESS_RECTANGLE_DIRECTORY.mkdir(
     parents=True,
     exist_ok=True
