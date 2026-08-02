@@ -9,7 +9,7 @@ description = "Which reserving method gives the most accurate out-of-sample ulti
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    'pandas>=2.2,<4'
+    'pandas>=3,<4'
 ]
 
 [project.optional-dependencies]
