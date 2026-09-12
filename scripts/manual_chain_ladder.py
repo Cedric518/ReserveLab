@@ -13,8 +13,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 def get_final_paths(COMPANY_CODE, VALUATION_YEAR, PATTERN_SOURCE):
     LOSS_TRIANGLE_PATH = PROJECT_ROOT / 'data' / 'processed' / 'triangles' / f'{COMPANY_CODE}_{VALUATION_YEAR}.csv'
     ESTIMATE_OUTPUT_PATH = (PROJECT_ROOT / 'data' / 'processed' / 'reserve_estimates' / f'company_{COMPANY_CODE}_{METHOD_NAME}_{FACTOR_AVERAGE}_{PATTERN_SOURCE}_as_of_{VALUATION_YEAR}.csv')
+    LOSS_RECTANGLE_PATH = PROJECT_ROOT / 'data' / 'processed' / 'rectangles' / f'{COMPANY_CODE}_{VALUATION_YEAR}.csv'
 
-    return LOSS_TRIANGLE_PATH, ESTIMATE_OUTPUT_PATH
+    return LOSS_TRIANGLE_PATH, ESTIMATE_OUTPUT_PATH, LOSS_RECTANGLE_PATH
 
 
 
@@ -29,8 +30,9 @@ def get_loss_triangle(LOSS_TRIANGLE_PATH, VALUATION_YEAR, PATTERN_SOURCE):
     company_triangle.columns = (
         company_triangle.columns.astype(int)
     )
-
+    
     if PATTERN_SOURCE == 'industry':
+        print('asdfouahsdfoasudfhaoisudfhaosidufhaosdiufhoasdiufhaoisdufhaoisdufhaosidufhasodfiuhasdofiuhasdofiuhasdofiuahsdfoiauhsdf')
         calculation_source = pd.read_csv(
             PROJECT_ROOT
             / 'data'
@@ -246,7 +248,8 @@ def start_calculating(calculation_source, company_triangle, COMPANY_CODE, VALUAT
             'pattern_source': PATTERN_SOURCE,
             'cumulative_paid': company_triangle.ffill(axis=1).iloc[:, -1],
             'age_to_lag_factor': latest_observed_lag.map(age_to_lag_factors.loc[:,'age_to_lag_factor']),
-            'estimated_cumulative_pay_at_10': estimates.loc[:,'estimated_claims'].values,
+            'estimated_cumulative_paid_lag_10': estimates.loc[:,'estimated_claims'].values,
+            'estimated_reserve': estimates.loc[:,'reserve_estimate'].values,
             'company_code': COMPANY_CODE,
             'method': METHOD_NAME,
             'factor_average': FACTOR_AVERAGE,
@@ -268,6 +271,8 @@ def start_calculating(calculation_source, company_triangle, COMPANY_CODE, VALUAT
     )
     print(f'\n!!! company_{COMPANY_CODE}_{METHOD_NAME}_{FACTOR_AVERAGE}_as_of_{VALUATION_YEAR} successfully saved to:')
     print(ESTIMATE_OUTPUT_PATH)
+
+    return estimates
 
 
 
@@ -327,147 +332,3 @@ def start_calculating(calculation_source, company_triangle, COMPANY_CODE, VALUAT
 #     ax.legend(['Current Claims', 'Estimated Reserve'])
 #     plt.tight_layout()
 #     plt.show()
-
-# cal results
-# selected_factors = calculate_selected_factors(chain_ladder)
-# age_to_lag_factors = calculate_age_to_lag_factors(selected_factors)
-# reserve_estimates = calculate_reserves(chain_ladder, age_to_lag_factors)
-# projected_triangle = project_loss_triangle(chain_ladder, selected_factors)
-# validate_and_summary(chain_ladder, projected_triangle, reserve_estimates)
-
-#========================================================================================================================
-#====TESTING========TESTING========TESTING========TESTING========TESTING========TESTING========TESTING========TESTING====
-#========================================================================================================================
-#REMEMBER TO PASS IN chain_ladder NOT loss_triangle, chain_ladder is a processed loss triangle where columns are integers and not strings, loss_triangle is a processed loss triangle where columns are strings.
-
-
-
-
-# ---------------------------------------------------------
-# 1. Calculate volume-weighted age-to-age factors
-# ---------------------------------------------------------
-
-# factor_records = []
-
-# for current_lag in range(1, FINAL_DEVELOPMENT_LAG):
-#     next_lag = current_lag + 1
-    
-#     matched_pairs = (
-#         calculation_source
-#         .loc[:, [current_lag, next_lag]]
-#         .dropna()
-#     )
-
-#     denominator = matched_pairs[current_lag].sum()
-#     numerator = matched_pairs[next_lag].sum()
-
-#     if denominator == 0:
-#         raise ValueError(
-#             'Cannot calculate the '
-#             f'{current_lag}-to-{next_lag} factor '
-#             'because its denominator sum is zero.'
-#         )
-
-#     age_to_age_factor = numerator / denominator
-
-#     factor_records.append(
-#         {
-#             'current_lag': current_lag,
-#             'next_lag': next_lag,
-#             'matched_accident_years': len(
-#                 matched_pairs
-#             ),
-#             'denominator': denominator,
-#             'numerator': numerator,
-#             'age_to_age_factor': (
-#                 age_to_age_factor
-#             ),
-#         }
-#     )
-
-
-# age_to_age_table = (
-#     pd.DataFrame(factor_records)
-#     .set_index('current_lag')
-# )
-
-
-# ---------------------------------------------------------
-# 2. Convert age-to-age factors to age-to-lag-10 factors
-# ---------------------------------------------------------
-
-# cumulative_development_factor = (
-#     age_to_age_table[
-#         'age_to_age_factor'
-#     ]
-#     .sort_index(ascending=False)
-#     .cumprod()
-#     .sort_index()
-# )
-
-# cumulative_development_factor.loc[
-#     FINAL_DEVELOPMENT_LAG
-# ] = 1.0
-
-# cumulative_development_factor = (
-#     cumulative_development_factor
-#     .sort_index()
-# )
-
-# cumulative_development_factor.name = (
-#     'age_to_lag_10_factor'
-# )
-
-
-
-
-# ---------------------------------------------------------
-# 5. Prepare the factor output table
-# ---------------------------------------------------------
-
-# factor_output = age_to_age_table.reindex(
-#     range(
-#         1,
-#         FINAL_DEVELOPMENT_LAG + 1,
-#     )
-# )
-
-# factor_output[
-#     'age_to_lag_10_factor'
-# ] = cumulative_development_factor
-
-# factor_output.insert(
-#     0,
-#     'company_code',
-#     COMPANY_CODE,
-# )
-
-# factor_output.insert(
-#     1,
-#     'valuation_year',
-#     VALUATION_YEAR,
-# )
-
-# factor_output.insert(
-#     2,
-#     'method',
-#     METHOD_NAME,
-# )
-
-# factor_output.insert(
-#     3,
-#     'factor_average',
-#     FACTOR_AVERAGE,
-# )
-
-# factor_output.insert(
-#     4,
-#     'pattern_source',
-#     PATTERN_SOURCE,
-# )
-
-
-
-
-
-    
