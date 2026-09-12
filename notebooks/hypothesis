@@ -1,0 +1,22 @@
+RQ: When is the company's own signal strong enough to trust, and when is it mostly noise?
+
+
+
+Company-specific patterns may work better when:
+- the company has substantial loss volume;
+- its link ratios are relatively stable across accident years;
+- its claims process has been consistent;
+- its development pattern differs systematically from peers;
+- removing one accident year does not drastically change its selected factors.
+Pooling may work better when:
+- the company is small;
+- only a few matched observations exist;
+- one large claim can dominate its triangle;
+- link ratios jump dramatically between accident years;
+- late-development factors depend on one or two observations;
+the company’s own factor estimates are highly sensitive to which years are included.
+
+
+1. COMPANY-SPECIFIC FACTOR
+2. PEER-POOLED FACTOR
+3. CREDIBILITY-BLENDED FACTOR
