@@ -1,49 +1,56 @@
 from pathlib import Path
-
 import pandas as pd
-from manual_chain_ladder import get_final_paths
 import matplotlib.pyplot as plt
 import streamlit as st
 import io
 import math
-
+import utilities as ut 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RAW_CSV_PATH = PROJECT_ROOT / 'data' / 'raw' / 'ppauto_pos.csv'
 raw = pd.read_csv(RAW_CSV_PATH)
 
 # for testing
-VALUATION_YEAR = 2007
-COMPANY_CODE = 43
-FINAL_DEVELOPMENT_LAG = 10
-PATTERN_SOURCE = 'company'
-METHOD_NAME = 'paid_chain_ladder'
-FACTOR_AVERAGE = 'volume'
+# VALUATION_YEAR = 2007
+# COMPANY_CODE = 43
+# FINAL_DEVELOPMENT_LAG = 10
+# PATTERN_SOURCE = 'company'
+# METHOD_NAME = 'paid_chain_ladder'
+# FACTOR_AVERAGE = 'volume'
 
 metrics = {
     'age_to_lag_factor': 'Age-to-Lag Factor',
-    'estimated_cumulative_paid_lag_10': 'Cumulative Paid at Lag 10',
+    'estimated_cumulative_paid': 'Cumulative Paid at Lag 10',
     'estimated_reserve': 'Estimated Reserve',
     'error': 'Net Error',
     'error': 'Error Percentage'
 }
+def start_visualization(style, company_code, method_name, fator_average, valuation_year):
+    company_specific_data, company_industry_data = ut.get_results(company_code, method_name, fator_average, valuation_year)
+    print('company_specific_data')
+    print(company_specific_data)
+    print(company_specific_data.dtypes)
+    print(company_specific_data.index)
+    print(company_specific_data.columns)
 
-def start_visualization(style, COMPANY_CODE, METHOD_NAME, FACTOR_AVERAGE, VALUATION_YEAR):
-    company_specific_data, company_industry_data = get_data(COMPANY_CODE, METHOD_NAME, FACTOR_AVERAGE, VALUATION_YEAR)
-    print('hi')
+    print("\n=== INDUSTRY ===")
+    print(company_industry_data)
+    print(company_industry_data.dtypes)
+    print(company_industry_data.index)
+    print(company_industry_data.columns)
     if style == 'classical':
         classic_visualization(company_specific_data, company_industry_data, metrics)
     elif style == 'interactive':
-        interactive_visualization(company_specific_data, company_industry_data, COMPANY_CODE)
+        interactive_visualization(company_specific_data, company_industry_data, company_code)
         
 
-def get_data(COMPANY_CODE, METHOD_NAME, FACTOR_AVERAGE, VALUATION_YEAR):
-    company_specific_data = pd.read_csv(PROJECT_ROOT / 'data' / 'processed' / 'reserve_estimates' / f'company_{COMPANY_CODE}_{METHOD_NAME}_{FACTOR_AVERAGE}_company_as_of_{VALUATION_YEAR}.csv', index_col=0)
-    company_industry_data = pd.read_csv(PROJECT_ROOT / 'data' / 'processed' / 'reserve_estimates' / f'company_{COMPANY_CODE}_{METHOD_NAME}_{FACTOR_AVERAGE}_industry_as_of_{VALUATION_YEAR}.csv', index_col=0)
+# def get_data(company_code, method_name, factor_average, valuation_year):
+#     company_specific_data = pd.read_csv(PROJECT_ROOT / 'data' / 'processed' / 'reserve_estimates' / f'company_{company_code}_{method_name}_{factor_average}_company_as_of_{valuation_year}.csv', index_col=0)
+#     company_industry_data = pd.read_csv(PROJECT_ROOT / 'data' / 'processed' / 'reserve_estimates' / f'company_{company_code}_{method_name}_{factor_average}_industry_as_of_{valuation_year}.csv', index_col=0)
 
-    return company_specific_data, company_industry_data
+#     return company_specific_data, company_industry_data
 
 
-# company_specific_data, company_industry_data = get_data(COMPANY_CODE, METHOD_NAME, FACTOR_AVERAGE, VALUATION_YEAR)
+# company_specific_data, company_industry_data = get_data(company_code, METHOD_NAME, FACTOR_AVERAGE, VALUATION_YEAR)
 # visualization(company_specific_data, company_industry_data)
 
 
@@ -56,6 +63,7 @@ def classic_visualization(company, industry, metrics):
     axes = axes.flatten() if hasattr(axes, 'flatten') else [axes]
 
     for ax, metric in zip(axes, metrics):
+        print(company[metric])
         ax.plot(
             company.index,
             company[metric],
@@ -65,8 +73,22 @@ def classic_visualization(company, industry, metrics):
         ax.plot(industry.index,
                 industry[metric],
                 marker='o',
-                label='Company-wide'
+                label='Industry-wide'
         )
+        if metric == 'estimated_cumulative_paid':
+            ax.plot(company.index,
+                company['actual_paid'],
+                marker='o',
+                label='Actual-paid'
+            )
+        if metric == 'estimated_reserve':
+            ax.plot(company.index,
+                    company['actual_reserve'],
+                    marker='o',
+                    label='Actual-reserve'
+            )
+
+            
 
         ax.set_xlabel('Accident Year')
         ax.set_ylabel(metric)
@@ -76,7 +98,7 @@ def classic_visualization(company, industry, metrics):
     plt.tight_layout()
     plt.show()
 
-# classic_visualization(company_specific_data, company_industry_data, ['age_to_lag_factor', 'estimated_cumulative_paid_lag_10', 'estimated_reserve', 'error'])
+# classic_visualization(company_specific_data, company_industry_data, ['age_to_lag_factor', 'estimated_cumulative_paid', 'estimated_reserve', 'error'])
 
 
 def interactive_visualization(company, industry, COMPANY_CODE):
@@ -84,7 +106,7 @@ def interactive_visualization(company, industry, COMPANY_CODE):
     #user selection
     metric = st.selectbox(
         'Select metric',
-        ['age_to_lag_factor', 'estimated_cumulative_paid_lag_10', 'estimated_reserve', 'error', 'error_percentage']
+        ['age_to_lag_factor', 'estimated_cumulative_paid', 'estimated_reserve', 'error', 'error_percentage']
         ) 
 
     # #save results

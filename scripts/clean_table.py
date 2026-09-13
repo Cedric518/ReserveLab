@@ -1,34 +1,34 @@
 from pathlib import Path
-
+import utilities as ut
 import pandas as pd
 
+PROJECT_ROOT = ut.PROJECT_ROOT
+RAW_CSV_PATH = (PROJECT_ROOT / 'data' / 'raw' / 'ppauto_pos.csv')
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-RAW_CSV_PATH = PROJECT_ROOT / 'data' / 'raw' / 'ppauto_pos.csv'
-CLEAN_CSV_PATH = PROJECT_ROOT / 'data' / 'interim' / 'ppauto_loss_development_clean.csv'
-
-
-def start_cleaning(VALUATION_YEAR):
-    BASE_COLUMNS = [
-        "company_code",
-        "company_name",
-        "is_single_entity",
-        "accident_year",
-        "development_year",
-        "development_lag",
-        "cumulative_paid",
-        "reported_incurred",
-        "bulk_ibnr_reserve",
-        "earned_premium_direct",
-        "earned_premium_ceded",
-        "earned_premium_net",
-        "posted_reserve_2007",
-    ]
-
+def start_cleaning(valuation_year):
+    #load raw file
     raw = pd.read_csv(RAW_CSV_PATH)
-    clean = raw.copy()
 
-    COLUMN_RENAME_MAP = {
+    #clean colum names and select required columns
+    clean = prepare_columns(raw)
+
+    #sort data
+    clean = sort_data(clean)
+
+    #create calculated columns
+    clean = add_observation_flag(clean, valuation_year)
+    clean = add_reserve_columns(clean)
+    clean = add_incremental_paid(clean)
+    clean = add_data_quality_flags(clean)
+
+    #save
+    clean_path = ut.get_clean_data_path()
+    clean.to_csv(clean_path, index=False)
+
+#rename raw columns and retain only the columns needed for analysis
+def prepare_columns(raw):
+
+    column_rename_map = {
         "GRCODE": "company_code",
         "GRNAME": "company_name",
         "AccidentYear": "accident_year",
@@ -44,79 +44,75 @@ def start_cleaning(VALUATION_YEAR):
         "PostedReserves2007": "posted_reserve_2007",
     }
 
-    clean = clean.rename(
-        columns=COLUMN_RENAME_MAP,
+    base_columns = [
+        'company_code',
+        'company_name',
+        'is_single_entity',
+        'accident_year',
+        'development_year',
+        'development_lag',
+        'cumulative_paid',
+        'reported_incurred',
+        'bulk_ibnr_reserve',
+        'earned_premium_direct',
+        'earned_premium_ceded',
+        'earned_premium_net',
+        'posted_reserve_2007',
+    ]
+
+    clean = raw.rename(
+        columns=column_rename_map,
         errors='raise'
     )
 
-    clean = clean.loc[:,BASE_COLUMNS].copy()
+    return clean.loc[:, base_columns].copy()
+
+    
 
 
-    ROW_ORDER = [
+#sort observations into accident-year/development order
+def sort_data(data):
+    sort_columns = [
         'company_code',
         'accident_year',
         'development_lag'
     ]
 
-    clean = (
-        clean.sort_values(ROW_ORDER)
-        .reset_index(drop=True)
+    return data.sort_values(sort_columns).reset_index(drop=True)
+
+#mark whether each observation is available at the requested valuation year
+def add_observation_flag(data, valuation_year):
+    column_name = f'is_observed_at_{valuation_year}'
+
+    data[column_name] = (
+        data['development_year'] <= valuation_year
     )
 
+    return data
 
+#calculate incremental paid losses within each company/accident-year development sequence
+def add_incremental_paid(data):
+    group_columns = ['company_code', 'accident_year']
 
-    clean['is_observed_at_2007'] = (
-        clean['development_year'] <= VALUATION_YEAR
-    )
+    data['incremental_paid'] = data.groupby(group_columns)['cumulative_paid'].diff()
 
-    clean['reported_unpaid_reserve'] = (
-        clean['reported_incurred'] - clean['cumulative_paid']
-    )
+    first_lag_mask = data['development_lag'] == 1
 
-    clean['reported_case_reserve'] = (
-        clean['reported_unpaid_reserve']
-        - clean['bulk_ibnr_reserve']
-    )
+    data.loc[first_lag_mask, 'incremental_paid'] = data.loc[first_lag_mask, 'cumulative_paid']
 
-    DEVELOPMENT_GROUP_COLUMNS = [
-        'company_code',
-        'accident_year'
-    ]
+    return data
 
-    clean['incremental_paid'] = (
-        clean
-        .groupby(DEVELOPMENT_GROUP_COLUMNS)[
-            'cumulative_paid'
-        ]
-        .diff()
-    )
+#add flags for negative values that mya require investigation
+def add_data_quality_flags(data):
+    data['has_negative_incremental_paid'] = data['incremental_paid'] < 0
+    data['has_negative_reported_unpaid'] = data['reported_unpaid_reserve'] < 0
+    data['has_negative_reported_case_reserve'] = data['reported_case_reserve'] < 0
 
-    clean.loc[
-        clean['development_lag'] == 1, 
-        'incremental_paid', 
-        ] = clean.loc[
-            clean['development_lag'] == 1,
-            'cumulative_paid'
-        ]
+    return data
 
-    clean["has_negative_incremental_paid"] = (
-        clean["incremental_paid"] < 0
-    )
+#calculate unpaid, case, and related reserve measures
+def add_reserve_columns(data):
+    data['reported_unpaid_reserve'] = data['reported_incurred'] - data['cumulative_paid']
+    data['reported_case_reserve'] = data['reported_unpaid_reserve'] - data['bulk_ibnr_reserve']
 
-    clean["has_negative_reported_unpaid"] = (
-        clean["reported_unpaid_reserve"] < 0
-    )
-
-    clean["has_negative_reported_case_reserve"] = (
-        clean["reported_case_reserve"] < 0
-    )
-
-    clean.to_csv(
-        CLEAN_CSV_PATH,
-        index=False
-    )
-
-    print('\nClean data saved to:')
-    print(CLEAN_CSV_PATH)
-
-    #raw -> clean
+    return data

@@ -3,58 +3,104 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import utilities as ut
 
 
-METHOD_NAME = 'paid_chain_ladder'
-FACTOR_AVERAGE = 'volume'
+method_name = 'paid_chain_ladder'
+factor_average = 'volume'
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-def get_final_paths(COMPANY_CODE, VALUATION_YEAR, PATTERN_SOURCE):
-    LOSS_TRIANGLE_PATH = PROJECT_ROOT / 'data' / 'processed' / 'triangles' / f'{COMPANY_CODE}_{VALUATION_YEAR}.csv'
-    ESTIMATE_OUTPUT_PATH = (PROJECT_ROOT / 'data' / 'processed' / 'reserve_estimates' / f'company_{COMPANY_CODE}_{METHOD_NAME}_{FACTOR_AVERAGE}_{PATTERN_SOURCE}_as_of_{VALUATION_YEAR}.csv')
-    LOSS_RECTANGLE_PATH = PROJECT_ROOT / 'data' / 'processed' / 'rectangles' / f'{COMPANY_CODE}_{VALUATION_YEAR}.csv'
-
-    return LOSS_TRIANGLE_PATH, ESTIMATE_OUTPUT_PATH, LOSS_RECTANGLE_PATH
-
-
-
-def get_loss_triangle(LOSS_TRIANGLE_PATH, VALUATION_YEAR, PATTERN_SOURCE):
-    loss_triangle = pd.read_csv(
-        LOSS_TRIANGLE_PATH,
-        index_col=0,
-    )
-
-    #company triangle is the loss development triangle of the specific company that we want to estimate
-    company_triangle = loss_triangle.copy()
-    company_triangle.columns = (
-        company_triangle.columns.astype(int)
-    )
+def start_calculating(company_code, valuation_year, pattern_source):
+    #get paths
     
-    if PATTERN_SOURCE == 'industry':
-        print('asdfouahsdfoasudfhaoisudfhaosidufhaosdiufhoasdiufhaoisdufhaoisdufhaosidufhasodfiuhasdofiuhasdofiuhasdofiuahsdfoiauhsdf')
-        calculation_source = pd.read_csv(
-            PROJECT_ROOT
-            / 'data'
-            / 'processed'
-            / 'triangles'
-            / f'industry_{VALUATION_YEAR}.csv',
-            index_col=0,
-        )
-        calculation_source.columns = (
-        calculation_source.columns.astype(int)
-    )
+    # triangle_path, _ = ut.get_triangle_paths(company_code, valuation_year)
+    # rectangle_path, _ = ut.get_rectangle_paths(company_code, valuation_year)
+    company_specific_est_path, _ = ut.get_results_paths(company_code, method_name, factor_average, valuation_year)
+    company_triangle, industry_triangle = ut.get_triangles(company_code, valuation_year)
+    loss_rectangle, _ = ut.get_rectangles(company_code, valuation_year)
+    print('\nHERE IS LOSS RECTANGLE')
+    print(loss_rectangle)
+
+
+    if pattern_source == 'industry':
+        calculation_source = industry_triangle
     else:
         calculation_source = company_triangle
+    company_triangle.columns = company_triangle.columns.astype(int)
+    calculation_source.columns = calculation_source.columns.astype(int)
 
-    #calculation_source is the data that we will use to calculate the age-to-age factors. It can be either the industry-wide data or the company-specific data, depending on the PATTERN_SOURCE variable.
+    # return the difference in claim size in each lag
+    print('\n===calculate how much more is claimed each year')
+    added_claims = calculate_added_claims(company_triangle)
+    print(added_claims)
+    #return one individual factor for each available accident year and development period (age to age).
+    print('\n===individual factors====')
+    individual_factors = calculate_individual_factors(calculation_source)
+    print(individual_factors)
 
-    print('\n===company triangle===')
-    print(company_triangle)
-    print('\n===calculation source===')
-    print(calculation_source)
+    # return one selected factor for every two consecutive lags
+    print('\n===selected factors====')
+    selected_factors = calculate_selected_factors(calculation_source)
+    print(selected_factors)
 
-    return company_triangle, calculation_source
+    #return age to lage factors for each available development period
+    print('c\n===calculate_age_to_lag_factors===')
+    age_to_lag_factors = calculate_age_to_lag_factors(selected_factors)
+    print(age_to_lag_factors)
+
+    #return estimated reserves and estimated claims
+    print('c\n===calculate_reserves===')
+    estimates = calculate_reserves(company_triangle, age_to_lag_factors)
+    print(estimates)
+
+    #return estimated value at each lag and development year as a full square
+    print('c\n===project_loss_triangle===')
+    print(project_loss_triangle(company_triangle, calculate_selected_factors(calculation_source)))
+
+    # ---------------------------------------------------------
+    # Find the latest observed position for each accident year
+    # ---------------------------------------------------------
+    latest_observed_lag = (company_triangle.notna().sum(axis=1).astype(int))
+    print('\n===latest observed lag for each accident year===')
+    print(latest_observed_lag)
+    print(f'\n===cumulative paid observed at {valuation_year}===')
+    print(company_triangle.ffill(axis=1).iloc[:, -1])
+
+    # ---------------------------------------------------------
+    # Estimate cumulative paid and reserve through lag 10
+    # ---------------------------------------------------------
+    print('\nHERE IS ACTUAL PAY')
+    print(loss_rectangle)
+    estimates = pd.DataFrame(
+        {
+            'valuation_year': valuation_year,
+            'latest_observed_lag': latest_observed_lag,
+            'pattern_source': pattern_source,
+            'last_observed_paid': company_triangle.ffill(axis=1).iloc[:, -1],
+            'age_to_lag_factor': latest_observed_lag.map(age_to_lag_factors.loc[:,'age_to_lag_factor']),
+            'estimated_cumulative_paid': estimates.loc[:,'estimated_claims'].values,
+            'estimated_reserve': estimates.loc[:,'reserve_estimate'].values,
+            'actual_paid': loss_rectangle['10'],
+            'actual_reserve': loss_rectangle['10'] - company_triangle.ffill(axis=1).iloc[:, -1],
+            'company_code': company_code,
+            'method': method_name,
+            'factor_average': factor_average,
+
+        }
+        
+    )
+    print('\nfinal fil that is about to be exported into .csv')
+    print(estimates)
+
+    # ---------------------------------------------------------
+    # Save and display the results
+    # ---------------------------------------------------------
+    ut.save_data(company_data=estimates, company_path=company_specific_est_path)
+    print(f'\n!!! company_{company_code}_{method_name}_{factor_average}_as_of_{valuation_year} successfully saved to:')
+    print(company_specific_est_path)
+
+    return estimates
 
 #this function returns the amount of claims added each lag
 def calculate_added_claims(loss_triangle):
@@ -188,147 +234,3 @@ def project_loss_triangle(loss_triangle, selected_factors):
                 projected_triangle.loc[i, e] = last_value * selected_factors.loc[e-1, 'age_to_age_factor']
     assert not projected_triangle.isna().any().any(), 'Projected triangle still has NaN values'
     return projected_triangle
-
-def start_calculating(calculation_source, company_triangle, COMPANY_CODE, VALUATION_YEAR, PATTERN_SOURCE, ESTIMATE_OUTPUT_PATH):
-    # return the difference in claim size in each lag
-    print('\n===calculate how much more is claimed each year')
-    added_claims = calculate_added_claims(company_triangle)
-    print(added_claims)
-    #return one individual factor for each available accident year and development period (age to age).
-    print('\n===individual factors====')
-    individual_factors = calculate_individual_factors(calculation_source)
-    print(individual_factors)
-
-    # return one selected factor for every two consecutive lags
-    print('\n===selected factors====')
-    selected_factors = calculate_selected_factors(calculation_source)
-    print(selected_factors)
-
-    #return age to lage factors for each available development period
-    print('c\n===calculate_age_to_lag_factors===')
-    age_to_lag_factors = calculate_age_to_lag_factors(selected_factors)
-    print(age_to_lag_factors)
-
-    #return estimated reserves and estimated claims
-    print('c\n===calculate_reserves===')
-    estimates = calculate_reserves(company_triangle, age_to_lag_factors)
-    print(estimates)
-
-    #return estimated value at each lag and development year as a full square
-    print('c\n===project_loss_triangle===')
-    print(project_loss_triangle(company_triangle, calculate_selected_factors(calculation_source)))
-    company_data = []
-    company_data = pd.DataFrame()
-    
-    # ---------------------------------------------------------
-    # Find the latest observed position for each accident year
-    # ---------------------------------------------------------
-
-    latest_observed_lag = (
-        company_triangle
-        .notna()
-        .sum(axis=1)
-        .astype(int)
-    )
-
-    print('\n===latest observed lag for each accident year===')
-    print(latest_observed_lag)
-
-    print(f'\n===cumulative paid observed at {VALUATION_YEAR}===')
-    print(company_triangle.ffill(axis=1).iloc[:, -1])
-
-    # ---------------------------------------------------------
-    # Estimate cumulative paid and reserve through lag 10
-    # ---------------------------------------------------------
-    
-    estimates = pd.DataFrame(
-        {
-            'valuation_year': VALUATION_YEAR,
-            'latest_observed_lag': latest_observed_lag,
-            'pattern_source': PATTERN_SOURCE,
-            'cumulative_paid': company_triangle.ffill(axis=1).iloc[:, -1],
-            'age_to_lag_factor': latest_observed_lag.map(age_to_lag_factors.loc[:,'age_to_lag_factor']),
-            'estimated_cumulative_paid_lag_10': estimates.loc[:,'estimated_claims'].values,
-            'estimated_reserve': estimates.loc[:,'reserve_estimate'].values,
-            'company_code': COMPANY_CODE,
-            'method': METHOD_NAME,
-            'factor_average': FACTOR_AVERAGE,
-
-        }
-        
-    )
-    print('\nfinal fil that is about to be exported into .csv')
-    print(estimates)
-
-    # ---------------------------------------------------------
-    # Save and display the results
-    # ---------------------------------------------------------
-
-    estimates.to_csv(
-        ESTIMATE_OUTPUT_PATH,
-        index=True,
-        index_label='accident_year',
-    )
-    print(f'\n!!! company_{COMPANY_CODE}_{METHOD_NAME}_{FACTOR_AVERAGE}_as_of_{VALUATION_YEAR} successfully saved to:')
-    print(ESTIMATE_OUTPUT_PATH)
-
-    return estimates
-
-
-
-
-
-# def visualization(projected_triangle, loss_triangle, reserve_estimates):
-#     assert not projected_triangle.isna().any().any()
-#     if projected_triangle.isna().any().any():
-#         missing_locations = projected_triangle.isna().stack()
-#         print(missing_locations[missing_locations].index.tolist())
-#     validation_table = pd.DataFrame()
-#     validation_table['current_claim']= loss_triangle.ffill(axis=1).iloc[:,-1].values
-#     validation_table['projected'] = projected_triangle.iloc[:,-1].values
-#     validation_table['estimated_claims'] = reserve_estimates['estimated_claims'].values
-#     validation_table['difference'] = validation_table['projected'] - validation_table['estimated_claims']
-#     validation_table['reserve'] = reserve_estimates['reserve_estimate'].values
-#     print(reserve_estimates['reserve_estimate'])
-#     print(validation_table['estimated_claims'])
-#     assert np.allclose(projected_triangle.iloc[:,-1].values, reserve_estimates['estimated_claims'].values), 'Projected triangle last column does not match estimated claims from reserve estimates'
-#     total_current_claims = validation_table['current_claim'].sum()
-#     total_projected_claims = validation_table['estimated_claims'].sum()
-#     total_reserve = validation_table['reserve'].sum()
-#     print(total_current_claims)
-#     portfolio_summary = pd.DataFrame({
-#         'current_claims': [total_current_claims],
-#         'projected_claims': [total_projected_claims],
-#         'reserve': [total_reserve],
-#     },
-#     index=['total']
-#     )
-#     print(portfolio_summary.round(2))
-#     reserve_report = validation_table[
-#         [
-#             'current_claim',
-#             'estimated_claims',
-#             'reserve'
-#         ]
-#     ].copy()
-#     print(reserve_report.round(2))
-
-#     plot_data = reserve_report[
-#         [
-#             'current_claim',
-#             'reserve',
-#         ]
-#     ].copy()
-
-#     ax = plot_data.plot(
-#         kind= 'bar',
-#         stacked=True,
-#         figsize= (10,6)
-#     )
-
-#     ax.set_title( 'Current Claims and Estimated Reserve by Accident Year' )
-#     ax.set_xlabel('Accident Year')
-#     ax.set_ylabel('Claim Amoun')
-#     ax.legend(['Current Claims', 'Estimated Reserve'])
-#     plt.tight_layout()
-#     plt.show()
