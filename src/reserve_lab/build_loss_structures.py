@@ -1,15 +1,17 @@
 from pathlib import Path 
 import pandas as pd
-import utilities as ut
+from . import utilities as ut
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CLEAN_INTERIM_CSV = PROJECT_ROOT / 'data' / 'interim' / 'ppauto_loss_development_clean.csv'
 
-def build_strcture(company_code, valuation_year):
+#persist=False skips writing anything to disk and just hands back the four
+#structures in memory - used for the walk-forward backtest in analysis.py,
+#which builds a triangle for many historical valuation years purely as
+#scratch work and only needs to keep the final one on disk.
+def build_strcture(company_code, valuation_year, persist=True):
     #paths
     clean = pd.read_csv(CLEAN_INTERIM_CSV)
-    triangle_path, triangle_industry_path = ut.get_triangle_paths(company_code, valuation_year)
-    rectangle_path, rectangle_industry_path = ut.get_rectangle_paths(company_code, valuation_year)
 
     #columns needed for calculation
     needed_columns = [
@@ -17,31 +19,37 @@ def build_strcture(company_code, valuation_year):
         'development_lag',
         'cumulative_paid',
         'development_year',
-        f'is_observed_at_{valuation_year}'
     ]
 
     #forming company data
     company_data = get_company_data(clean, company_code, needed_columns)
-    company_triangle, company_rectangle = create_company_structure(company_data, valuation_year)
+    company_triangle, company_square = create_company_structure(company_data, valuation_year)
 
     #forming industry data
     industry_data = clean.loc[:, needed_columns].copy()
-    industry_triangle, industry_rectangle = create_industry_structure(industry_data, valuation_year)
-    
-    #save triangles
-    ut.save_data(
-    company_data=company_triangle,
-    company_path=triangle_path,
-    industry_data=industry_triangle,
-    industry_path=triangle_industry_path,
-    )
-    #save rectangles
-    ut.save_data(
-    company_data=company_rectangle,
-    company_path=rectangle_path,
-    industry_data=industry_rectangle,
-    industry_path=rectangle_industry_path,
-    )
+    industry_triangle, industry_square = create_industry_structure(industry_data, valuation_year)
+
+    if persist:
+        triangle_path, triangle_industry_path = ut.get_triangle_paths(company_code, valuation_year)
+        square_path, square_industry_path = ut.get_square_paths(company_code)
+
+        #save triangles
+        ut.save_data(
+        company_data=company_triangle,
+        company_path=triangle_path,
+        industry_data=industry_triangle,
+        industry_path=triangle_industry_path,
+        )
+        #save squares (same content regardless of valuation_year - see
+        #get_square_paths)
+        ut.save_data(
+        company_data=company_square,
+        company_path=square_path,
+        industry_data=industry_square,
+        industry_path=square_industry_path,
+        )
+
+    return company_triangle, company_square, industry_triangle, industry_square
 
 
 def create_industry_structure(data,valuation_year):
@@ -58,12 +66,12 @@ def create_industry_structure(data,valuation_year):
         columns='development_lag',
         values='cumulative_paid'
     )
-    loss_rectangle = aggregated_industry_data.pivot(
+    loss_square = aggregated_industry_data.pivot(
         index='accident_year',
         columns='development_lag',
         values='cumulative_paid'
     )
-    return loss_triangle, loss_rectangle
+    return loss_triangle, loss_square
 
 def create_company_structure(data, valuation_year):
     data[f'is_observed_at_{valuation_year}'] = data['development_lag'] + data['accident_year'] -1 <= valuation_year
@@ -72,12 +80,12 @@ def create_company_structure(data, valuation_year):
         columns='development_lag',
         values='cumulative_paid'
     )
-    loss_rectangle = data.pivot(
+    loss_square = data.pivot(
         index='accident_year',
         columns='development_lag',
         values='cumulative_paid'
     )
-    return loss_triangle, loss_rectangle
+    return loss_triangle, loss_square
 
 
 def get_company_data(clean, company_code, needed_columns):

@@ -2,19 +2,22 @@ from pathlib import Path
 
 import pandas as pd
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RAW_CSV_PATH = PROJECT_ROOT / 'data' / 'raw' / 'ppauto_pos.csv'
 
-raw = pd.read_csv(RAW_CSV_PATH)
-
-# print("\n=== DATAFRAME SUMMARY ===")
-# raw.info()
-
-# print("\n=== COLUMN DATA TYPES ===")
-# print(raw.dtypes)
 # data validation
 
 def start_validation():
+    # read here, not at module import time - importing this module should
+    # never require data/raw/ppauto_pos.csv to already exist on disk
+    raw = pd.read_csv(RAW_CSV_PATH)
+
+    # print("\n=== DATAFRAME SUMMARY ===")
+    # raw.info()
+
+    # print("\n=== COLUMN DATA TYPES ===")
+    # print(raw.dtypes)
+
     EXPECTED_COLUMNS = {
         "GRCODE",
         "GRNAME",

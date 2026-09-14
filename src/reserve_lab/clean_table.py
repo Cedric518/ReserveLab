@@ -1,5 +1,5 @@
 from pathlib import Path
-import utilities as ut
+from . import utilities as ut
 import pandas as pd
 
 PROJECT_ROOT = ut.PROJECT_ROOT
