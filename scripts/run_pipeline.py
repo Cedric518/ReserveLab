@@ -46,12 +46,23 @@ def main():
     #processed above (reads what's already on disk, no recomputation) and
     #saves the correlation/binned-curve csvs
     analysis.analyze_credibility_vs_size(METHOD_NAME, FACTOR_AVERAGE, VALUATION_YEAR)
-    #chart exactly the csvs analyze_credibility_vs_size just saved - these
-    #only use fig.savefig (no plt.show()), so unlike
-    #compare.start_visualization they don't block and are safe to call
-    #unconditionally here
-    compare.plot_credibility_scatter(METHOD_NAME, FACTOR_AVERAGE, VALUATION_YEAR)
-    compare.plot_credibility_curve(METHOD_NAME, FACTOR_AVERAGE, VALUATION_YEAR)
+    #chart exactly the csv analyze_credibility_vs_size just saved -
+    #download=True since this is an unattended batch run with nowhere to
+    #display a window; plt.show() is never called here, so unlike
+    #compare.start_visualization this doesn't block
+    compare.plot_credibility_curve(METHOD_NAME, FACTOR_AVERAGE, VALUATION_YEAR, download=True)
+
+    #median/mean ultimate paid loss by accident year across every company
+    #processed above - the cross-company benchmark scripts/visualize.py
+    #charts each company against (see compare.plot_company_vs_median_paid)
+    analysis.compute_industry_paid_benchmark()
+
+    #per-company noise (how erratic its own growth trend is) and
+    #own-pattern accuracy - reruns the walk-forward backtest per company,
+    #so it's saved to disk here rather than recomputed on every
+    #scripts/visualize.py --noise call
+    analysis.compute_noise_and_accuracy(METHOD_NAME, FACTOR_AVERAGE, VALUATION_YEAR)
+    analysis.analyze_noise_vs_size(METHOD_NAME, FACTOR_AVERAGE, VALUATION_YEAR)
 
 def run_one_company(company_code, valuation_year, method_name, factor_average):
     print(f'\n--- company_code={company_code} ---')

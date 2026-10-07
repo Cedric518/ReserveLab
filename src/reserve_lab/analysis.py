@@ -54,6 +54,16 @@ def apply_best_ratio(target_company, target_industry, weighting_by_lag):
 
     for metric_name, ratio_column in [('mae', 'best_r_w_mae'), ('rmse', 'best_r_w_rmse')]:
         r = target_company['latest_observed_lag'].map(weighting_by_lag[ratio_column])
+        # a lag with no informative observations (company and industry
+        # factor always agreed - see calculate_best_ratio's filtering,
+        # which always excludes the terminal lag: at the last development
+        # lag there's nothing left to develop into, so both factors are
+        # trivially 1.0) has no row in weighting_by_lag at all, so r comes
+        # back NaN for it. r is genuinely meaningless there - blending is
+        # a no-op when company_factor == industry_factor, so ANY r gives
+        # the same blended_factor - a neutral 0.5 avoids propagating NaN
+        # into the saved estimate without pretending r means anything.
+        r = r.fillna(0.5)
         blended_factor = r * target_company['age_to_lag_factor'] + (1 - r) * target_industry['age_to_lag_factor']
         blended_cumulative_paid = target_company['last_observed_paid'] * blended_factor
         blended_reserve = blended_cumulative_paid - target_company['last_observed_paid']
@@ -227,6 +237,31 @@ def calculate_best_ratio(company, industry):
         if subset.empty:
             continue
 
+        # a row where the company's own factor and the industry's factor
+        # are (essentially) identical can't tell us anything about which
+        # one to trust more: blending them with ANY ratio r gives the
+        # exact same prediction, so that row's error is fixed no matter
+        # what r ends up fitted. This isn't rare - it happens whenever
+        # neither the company nor the industry has yet lived past the lag
+        # being projected (see run_walk_forward_backtests' docstring):
+        # both factors fall back to the same "assume no more development"
+        # value, not because the company and industry patterns genuinely
+        # agree. Keeping such a row would only pad the observation count
+        # and inflate the reported error with a mismatch r can't fix, so
+        # it's dropped before fitting rather than left in the dataset.
+        company_factor = subset['age_to_lag_factor_company'].to_numpy(dtype=float)
+        industry_factor = subset['age_to_lag_factor_industry'].to_numpy(dtype=float)
+        informative = ~np.isclose(company_factor, industry_factor)
+        num_excluded = int((~informative).sum())
+        subset = subset[informative]
+        if subset.empty:
+            print(
+                f'WARNING: development lag {lag} has no informative observations left '
+                '(company and industry factor always agreed, likely from truncated early '
+                'valuation years) - skipping this lag entirely.'
+            )
+            continue
+
         last_observed = subset['last_observed_paid_company'].to_numpy(dtype=float)
         company_factor = subset['age_to_lag_factor_company'].to_numpy(dtype=float)
         industry_factor = subset['age_to_lag_factor_industry'].to_numpy(dtype=float)
@@ -255,6 +290,7 @@ def calculate_best_ratio(company, industry):
         results.append({
             'latest_observed_lag': lag,
             'num_observations': len(subset),
+            'num_excluded_uninformative': num_excluded,
             'accident_years': sorted(subset['accident_year'].unique().tolist()),
             'company_share_of_industry': company_share_of_industry,
             'best_r_w_mae': r_mae,
@@ -301,8 +337,8 @@ def calculate_best_ratio(company, industry):
 #table is normally read.
 #
 #this function only computes and saves csvs - it draws no charts. See
-#compare.plot_credibility_scatter and compare.plot_credibility_curve for
-#the visualizations of exactly the csvs this saves; keeping that
+#compare.plot_credibility_curve for the visualization of exactly the csv
+#this saves; keeping that
 #separate means this stays reusable (and testable) without matplotlib
 #ever entering the picture, matching the compute/vs/visualize split the
 #rest of this project follows (manual_chain_ladder.py, backtesting.py etc.
@@ -409,6 +445,188 @@ def analyze_credibility_vs_size(method_name, factor_average, valuation_year, min
     print(f'!!! binned credibility curve saved to:\n{binned_path}')
 
     return pooled, summary, binned_summary
+
+#cross-company benchmark: what did a "typical" company actually pay (in
+#raw dollars) by accident year, across every company that has a saved
+#square? Squares hold the true, fully-run-off cumulative paid amount at
+#every development lag (build_loss_structures.create_company_structure) -
+#the last column is each company's real ultimate paid loss for that
+#accident year, no chain-ladder projection involved. This answers "is
+#company X a lot bigger/smaller than a typical company", which is a
+#different question from the industry-wide chain-ladder line already in
+#the cumulative-paid chart (that one asks "how well does the industry's
+#own factor pattern predict company X's future").
+#
+#company size is heavily right-skewed (see the population section of the
+#report - a handful of companies are enormous next to the rest), so the
+#mean ultimate paid is saved here too but is dragged toward those few
+#giants; compare.py's benchmark chart plots the median, not the mean, for
+#exactly that reason.
+#
+#doesn't depend on method_name/factor_average/valuation_year (squares
+#don't - see get_square_paths), so unlike the credibility csvs this one
+#saves under a single untagged filename.
+def compute_industry_paid_benchmark():
+    company_codes = ut.get_all_company_codes()
+
+    ultimate_by_year = {}
+    for company_code in company_codes:
+        square_path, _ = ut.get_square_paths(company_code)
+        if not square_path.exists():
+            continue
+        square = pd.read_csv(square_path, index_col=0)
+        ultimate = square[square.columns[-1]]  # last column = final development lag = ultimate
+        for accident_year, value in ultimate.items():
+            ultimate_by_year.setdefault(int(accident_year), []).append(float(value))
+
+    if not ultimate_by_year:
+        raise RuntimeError(
+            'No company has a saved square yet - run build_loss_structures.build_strcture '
+            '(e.g. via scripts/run_pipeline.py) for at least one company first.'
+        )
+
+    rows = []
+    for accident_year, values in sorted(ultimate_by_year.items()):
+        values = np.array(values, dtype=float)
+        rows.append({
+            'accident_year': accident_year,
+            'num_companies': len(values),
+            'median_ultimate_paid': float(np.median(values)),
+            'mean_ultimate_paid': float(np.mean(values)),
+        })
+    benchmark = pd.DataFrame(rows).set_index('accident_year')
+
+    benchmark_path = ut.PROJECT_ROOT / 'data' / 'processed' / 'results' / 'industry_paid_benchmark_by_accident_year.csv'
+    benchmark_path.parent.mkdir(parents=True, exist_ok=True)
+    benchmark.to_csv(benchmark_path, index_label='accident_year')
+    print(f'\n!!! industry paid benchmark (median/mean ultimate paid by accident year) saved to:\n{benchmark_path}')
+
+    return benchmark
+
+
+#per-company "how noisy is this company, and how well does that predict
+#things" table - the compute half of the noise/accuracy exploration from
+#this session (see compare.py's plot_noise_vs_error/plot_share_vs_r/
+#plot_share_vs_error/plot_noise_curve for the visualize half). Three
+#pieces per company:
+#
+#  1. residual_noise_std / annual_growth_rate_pct / trend_r_squared: fit
+#     a straight line to log(actual_paid) vs accident_year (ordinary
+#     least squares) - the SLOPE is this company's smooth compounding
+#     growth rate, the leftover residuals are noise around that trend,
+#     line, not around a flat average (see plot_noise_vs_error's
+#     docstring for why a flat average would wrongly count fast, smooth
+#     growth as "noisy"). Only fit for companies with >=4 nonzero-paid
+#     accident years - fewer than that and a 2-parameter line fit isn't
+#     meaningful.
+#  2. company_only_rmse_pct: this company's own age-to-lag pattern's
+#     walk-forward prediction error, in percentage terms, using ONLY the
+#     company's own factor (no industry blending) - reuses
+#     run_walk_forward_backtests, the same pooled data calculate_best_ratio
+#     fits r from, just aggregated as one percentage-RMSE number per
+#     company instead of split by lag.
+#  3. mean_company_share / mean_best_r_rmse: averaged across that
+#     company's own lags from the already-saved weighting_by_lag file -
+#     one number per company instead of one per (company, lag) pair, so
+#     they're directly comparable to (1) and (2) above (also one-per-
+#     company).
+def compute_noise_and_accuracy(method_name, factor_average, valuation_year):
+    company_codes = [
+        int(p.name) for p in (ut.PROJECT_ROOT / 'data' / 'processed' / 'results').iterdir() if p.is_dir()
+    ]
+    company_codes.sort()
+    company_names = ut.get_company_names()
+
+    rows = []
+    for company_code in company_codes:
+        try:
+            company, _ = ut.get_results(company_code, method_name, factor_average, valuation_year)
+        except FileNotFoundError:
+            continue
+
+        paid = company['actual_paid']
+        nonzero = paid[paid > 0]
+        residual_noise_std = annual_growth_rate_pct = trend_r_squared = np.nan
+        if len(nonzero) >= 4:
+            years = nonzero.index.to_numpy(dtype=float)
+            log_paid = np.log(nonzero.to_numpy(dtype=float))
+            slope, intercept, r_value, _, _ = stats.linregress(years, log_paid)
+            fitted = slope * years + intercept
+            residual_noise_std = float(np.std(log_paid - fitted))
+            annual_growth_rate_pct = float((np.exp(slope) - 1) * 100)
+            trend_r_squared = float(r_value ** 2)
+
+        company_only_rmse_pct = np.nan
+        try:
+            pooled_company, _ = run_walk_forward_backtests(company_code, valuation_year)
+            company_only_estimate = pooled_company['last_observed_paid'] * pooled_company['age_to_lag_factor']
+            pct_error = (company_only_estimate - pooled_company['actual_paid']) / pooled_company['actual_paid'] * 100
+            pct_error = pct_error.replace([np.inf, -np.inf], np.nan).dropna()
+            if len(pct_error) >= 4:
+                company_only_rmse_pct = float(np.sqrt(np.mean(pct_error ** 2)))
+        except Exception as exc:
+            print(f'WARNING: could not compute company-only accuracy for company_code={company_code}, failed with: {exc}')
+
+        mean_company_share = mean_best_r_rmse = np.nan
+        weighting_path = ut.get_weighting_path(company_code, method_name, factor_average, valuation_year)
+        if weighting_path.exists():
+            weighting = pd.read_csv(weighting_path)
+            mean_company_share = float(weighting['company_share_of_industry'].mean())
+            mean_best_r_rmse = float(weighting['best_r_w_rmse'].mean())
+
+        rows.append({
+            'company_code': company_code,
+            'company_name': company_names.get(company_code, 'Unknown company name'),
+            'total_ultimate_paid': float(paid.sum()),
+            'residual_noise_std': residual_noise_std,
+            'annual_growth_rate_pct': annual_growth_rate_pct,
+            'trend_r_squared': trend_r_squared,
+            'company_only_rmse_pct': company_only_rmse_pct,
+            'mean_company_share': mean_company_share,
+            'mean_best_r_rmse': mean_best_r_rmse,
+        })
+
+    result = pd.DataFrame(rows).set_index('company_code')
+
+    tag = f'{method_name}_{factor_average}_as_of_{valuation_year}'
+    result_path = ut.PROJECT_ROOT / 'data' / 'processed' / 'results' / f'noise_and_accuracy_by_company_{tag}.csv'
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    result.to_csv(result_path, index_label='company_code')
+    print(f'\n!!! per-company noise/accuracy table saved to:\n{result_path}')
+
+    return result
+
+
+#the "noise curve": mean AND median residual_noise_std per company-size
+#decile, mirroring calculate_best_ratio's credibility curve exactly (same
+#qcut-into-10-equal-count-groups approach, same mean/median-side-by-side
+#reasoning - see analyze_credibility_vs_size's docstring for why both are
+#shown rather than just one) but for noise instead of best_r, and binned
+#by company (one row per company) rather than by (company, lag) pair.
+#reads the csv compute_noise_and_accuracy already saved rather than
+#recomputing it - that function reruns the walk-forward backtest for
+#every company, expensive enough to be worth caching to disk once.
+def analyze_noise_vs_size(method_name, factor_average, valuation_year):
+    tag = f'{method_name}_{factor_average}_as_of_{valuation_year}'
+    noise_path = ut.PROJECT_ROOT / 'data' / 'processed' / 'results' / f'noise_and_accuracy_by_company_{tag}.csv'
+    if not noise_path.exists():
+        raise FileNotFoundError(f'{noise_path} does not exist yet - run analysis.compute_noise_and_accuracy first.')
+    noise_and_accuracy = pd.read_csv(noise_path)
+
+    valid = noise_and_accuracy.dropna(subset=['total_ultimate_paid', 'residual_noise_std'])
+    valid = valid.loc[valid['total_ultimate_paid'] > 0]
+
+    decile = pd.qcut(valid['total_ultimate_paid'], q=10, duplicates='drop')
+    binned = valid.groupby(decile, observed=True)['residual_noise_std'].agg(['mean', 'median', 'count'])
+    binned = binned.reset_index().rename(columns={'total_ultimate_paid': 'size_decile_range'})
+    binned.insert(0, 'decile', range(1, len(binned) + 1))
+
+    binned_path = ut.PROJECT_ROOT / 'data' / 'processed' / 'results' / f'noise_vs_size_binned_{tag}.csv'
+    binned.to_csv(binned_path, index=False)
+    print(f'\n!!! noise-by-size-decile table saved to:\n{binned_path}')
+
+    return binned
+
 
 # company_code = 43
 # valuation_year = 2006

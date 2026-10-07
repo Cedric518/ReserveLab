@@ -1,0 +1,945 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage[strings]{underscore}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{longtable}
+
+\hypersetup{colorlinks=true, linkcolor=blue!50!black, urlcolor=blue!50!black, citecolor=blue!50!black}
+
+\newcommand{\rmae}{r^{\text{MAE}}}
+\newcommand{\rrmse}{r^{\text{RMSE}}}
+\DeclareMathOperator*{\argmin}{arg\,min}
+
+\title{\textbf{Empirical Credibility Weighting in Paid Chain-Ladder Reserving:}\\
+\large Methodology, Walk-Forward Backtesting Design, and Cross-Sectional\\
+Analysis of Company Size and Loss-Experience Volatility}
+\author{reserveLab \\ \small Private Passenger Automobile, NAIC Schedule P (CAS Loss Reserving Database)}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+\noindent
+This report documents the full methodology, backtesting design, and statistical analysis of an
+empirical credibility-weighting study built on the NAIC Schedule P private-passenger-automobile
+extract of the CAS Loss Reserving Database (143 companies, accident years 1998--2007, development
+lags 1--10). For each company and each development lag, a blend ratio $r \in [0,1]$ between the
+company's own age-to-lag development factor and the pooled industry factor is fitted by exact,
+closed-form minimization of out-of-sample walk-forward backtest error, separately under mean
+absolute error (MAE) and root mean squared error (RMSE) loss. The resulting fitted ratios are
+then examined cross-sectionally against (i) each company's share of total industry paid losses
+and (ii) a measure of each company's loss-experience volatility, to test the credibility-theoretic
+hypothesis that companies with larger, more stable books of business warrant greater reliance on
+their own historical development pattern. Pearson correlation between company size and fitted
+credibility is statistically indistinguishable from zero ($r=0.024$, $p=0.45$), while
+rank-based measures (Spearman $\rho = 0.129$, $p<0.001$; Kendall $\tau_b = 0.093$, $p<0.001$)
+detect a weak but real monotonic relationship, a discrepancy attributable to heavy corner-clustering
+of the fitted ratio at the boundary values $0$ and $1$ (57.2\% of reliable observations under MAE
+loss). A directly measured volatility statistic --- the sample standard deviation of year-over-year
+percentage change in ultimate paid losses --- is shown to correlate strongly with prediction error
+(Spearman $\rho=0.479$, $p<10^{-6}$) and strongly \emph{negatively} with company size
+(Spearman $\rho=-0.683$, $p<10^{-15}$), suggesting that volatility, not size per se, is the more
+fundamental driver, consistent with the process-variance basis of classical credibility theory.
+Volatility does not, however, predict the \emph{direction} of the fitted blend ratio with comparable
+strength, a result explained by within-company variation of $r$ across development lags. Limitations
+of the underlying data --- extreme size concentration, short per-lag backtest samples, and
+unregularized point-estimate optimization --- are discussed, together with suggested extensions.
+\end{abstract}
+
+\tableofcontents
+
+%==============================================================================
+\section{Introduction and Objective}
+%==============================================================================
+
+The central actuarial question addressed here is a practical reserving problem: when estimating
+a private-passenger-automobile insurer's ultimate losses using the paid chain-ladder method, how
+much weight should be placed on that company's own historical loss-development pattern, versus
+the pattern implied by the broader industry? This is a credibility-weighting question in the
+classical sense (B\"uhlmann, 1967; see Appendix~\ref{app:buhlmann} for the textbook formula used
+for contrast), but rather than adopting a parametric credibility model \emph{a priori}, this
+project fits the blend ratio empirically, directly from out-of-sample backtest error, and then
+asks whether the resulting fitted ratios behave the way credibility theory predicts they should:
+larger, more stable companies should receive more credibility for their own data.
+
+Section~\ref{sec:data} describes the data source and population. Section~\ref{sec:cl} defines the
+paid chain-ladder mechanics used throughout. Section~\ref{sec:blend} defines the credibility blend.
+Section~\ref{sec:walkforward} describes the walk-forward backtesting design that generates enough
+independent observations per development lag to fit anything at all. Section~\ref{sec:optimization}
+derives the exact closed-form/candidate-search optimizers used for the blend ratio under MAE and
+RMSE loss, with a fully worked numerical example. Section~\ref{sec:casestudies} presents
+illustrative single-company case studies. Section~\ref{sec:crosssection} presents the cross-sectional
+correlation and decile-binned analysis of credibility versus company size. Section~\ref{sec:volatility}
+introduces the volatility measure and its correlations with error, size, and the fitted ratio itself.
+Section~\ref{sec:discussion} discusses how properties of the data source shape every result above.
+Section~\ref{sec:limitations} lists limitations and proposed extensions.
+
+%==============================================================================
+\section{Data}
+\label{sec:data}
+%==============================================================================
+
+\subsection{Source and Provenance}
+
+The raw data (\texttt{data/raw/ppauto\_pos.csv}) is an extract of the private-passenger-automobile
+line from the CAS Loss Reserving Database, itself compiled from NAIC Schedule P, Part 1 filings ---
+the loss-development exhibit every U.S. property-casualty insurer or group is required to file
+annually with state insurance regulators. The extract contains 13{,}250 rows and 13 raw fields per
+row: \texttt{GRCODE} (NAIC group/company code), \texttt{GRNAME} (company name), \texttt{AccidentYear},
+\texttt{DevelopmentYear}, \texttt{DevelopmentLag}, \texttt{IncurredLosses}, \texttt{CumPaidLoss},
+\texttt{BulkLoss} (bulk~+~IBNR reserve), \texttt{EarnedPremDIR}, \texttt{EarnedPremCeded},
+\texttt{EarnedPremNet}, \texttt{Single} (1 if a single legal entity, 0 if an NAIC-defined group
+aggregate of pooled subsidiaries), and \texttt{PostedReserves2007}.
+
+\subsection{Temporal Structure: a Genuine, Disclosed ``Square,'' not an Extrapolation}
+\label{sec:square}
+
+Accident years run 1998--2007 (10 accident years) and development lag runs 1--10, with
+$\texttt{DevelopmentYear} = \texttt{AccidentYear} + \texttt{DevelopmentLag} - 1$. Critically, the
+raw file's \texttt{DevelopmentYear} field ranges from 1998 through \textbf{2016}, not 2007: for
+accident year 2007, development lag 10 corresponds to development year 2016. This means the
+dataset was compiled retrospectively, using Schedule~P filings as late as calendar year 2016 to
+disclose the \emph{true, realized} cumulative paid loss at full maturity (lag 10) for every
+accident year 1998--2007 -- including accident year 2007, whose lag-10 outcome would not actually
+have been knowable as of the December 31, 2007 valuation date used throughout this project. This
+project refers to this fully-populated accident-year $\times$ development-lag matrix as the
+\emph{square}, in contrast to the \emph{triangle}: the triangle is the square restricted to the
+cells that would genuinely have been observable as of a given valuation year $v$ (i.e., cells with
+$\text{AccidentYear} + \text{DevelopmentLag} - 1 \le v$). Every backtest and every ``actual paid''
+figure used for error grading in this project uses the square's true, disclosed future value ---
+never a model-based extrapolation -- which is what makes rigorous out-of-sample grading possible
+at all. (Earlier project notes used the non-standard term ``rectangle''; it has been renamed
+throughout the codebase to ``square'' for clarity to other actuaries.)
+
+\subsection{Population Characteristics}
+\label{sec:population}
+
+The extract contains $143$ distinct \texttt{GRCODE} entities: $107$ are single legal entities
+(\texttt{Single}=1) and $36$ are NAIC group aggregates (\texttt{Single}=0). Total direct earned
+premium (summed 1998--2007) is extremely right-skewed:
+
+\begin{table}[h]
+\centering
+\caption{Direct earned premium distribution across the 143 companies (1998--2007 total)}
+\begin{tabular}{lr}
+\toprule
+Statistic & Value \\
+\midrule
+Median company & \$876{,}870 \\
+Mean company & \$16{,}128{,}410 \\
+Largest company (State Farm Mut Grp) & \$1{,}615{,}154{,}280 \\
+Top 10 companies' share of total industry premium & 92.08\% \\
+Top 20 companies' share of total industry premium & 95.22\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Ten largest companies by total direct earned premium, 1998--2007}
+\begin{tabular}{lr}
+\toprule
+Company & Total direct earned premium \\
+\midrule
+State Farm Mut Grp & \$1{,}615{,}154{,}280 \\
+United Services Automobile Assn Grp & \$274{,}232{,}260 \\
+FL Farm Bureau Grp & \$65{,}413{,}820 \\
+New Jersey Manufacturers Grp & \$45{,}496{,}140 \\
+Kentucky Farm Bureau Mut Ins Grp & \$23{,}365{,}150 \\
+NC Farm Bureau Ins Grp & \$21{,}186{,}780 \\
+Tenn Farmers Mut & \$21{,}172{,}580 \\
+Federal Ins Co Grp & \$21{,}114{,}610 \\
+Old American Cty Mut Fire Ins Co & \$19{,}916{,}490 \\
+Home State Cnty Mut Ins Co & \$16{,}556{,}360 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+At the opposite extreme, ten companies report \emph{zero} total direct earned premium over the
+entire ten-year window (e.g., Lumber Ins Cos, San Antonio Reins Co, Adriatic Ins Co, Allegheny Cas
+Co) while still carrying nonzero paid-loss entries in the triangle -- consistent with runoff or
+reinsurance-only entities rather than active writers of new private-passenger-auto business. This
+concentration is directly relevant to Sections~\ref{sec:crosssection}--\ref{sec:discussion}.
+
+\subsection{Coverage Completeness}
+
+Not every company has data for all ten accident years; a company that exited the line, was
+acquired, or stopped filing has a shorter observed history. Of the 143 companies, $121$ (84.6\%)
+have the full 10 accident years; the remaining $22$ are distributed as follows:
+
+\begin{table}[h]
+\centering
+\caption{Number of companies by count of accident years with any recorded data}
+\begin{tabular}{lrrrrrrrrr}
+\toprule
+Accident years present & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 & 10 \\
+\midrule
+Number of companies & 2 & 3 & 6 & 1 & 2 & 5 & 1 & 2 & 121 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+This project flags companies with fewer than $\texttt{THIN\_HISTORY\_ACCIDENT\_YEARS} = 5$
+accident years as \texttt{thin\_history\_flag = True} (a boolean column persisted onto every
+saved results row, surfaced as an explicit on-chart warning), since both the development-factor
+fit and the backtested credibility ratio for such companies rest on almost no data. Company
+$41700$ (Southern Group Ind Inc), with data for only accident years 1998--1999, is the extreme
+case discussed in Section~\ref{sec:thin}.
+
+\subsection{Pipeline Coverage}
+
+Of the 143 companies, $112$ were processed successfully end-to-end by the full estimation
+pipeline. The remaining $31$ fail deterministically at the triangle-construction stage, tripping
+an explicit data-validity guard (a zero denominator in an age-to-age factor -- i.e., a company
+whose cumulative paid loss is exactly zero at some development lag while nonzero at an adjacent
+lag, making the ratio undefined). This is treated as a legitimate data-quality guard rather than a
+defect; all cross-sectional results in Sections~\ref{sec:crosssection}--\ref{sec:volatility} are
+therefore drawn from the $112$ successfully processed companies (further reduced by per-analysis
+reliability filters described in those sections).
+
+%==============================================================================
+\section{Paid Chain-Ladder Methodology}
+\label{sec:cl}
+%==============================================================================
+
+\subsection{Notation}
+
+Throughout, let:
+\begin{itemize}[leftmargin=2.2cm]
+\item[$c$] index a company (or, when noted, the pooled industry aggregate $I$);
+\item[$a$] denote accident year;
+\item[$v$] denote valuation year (the ``as-of'' date at which a snapshot of the data is taken);
+\item[$L$] denote development lag, $L = v - a + 1$, $L \in \{1, \dots, 10\}$;
+\item[$P^{(c)}_{a,L}$] denote cumulative paid loss for company $c$, accident year $a$, at
+  development lag $L$ -- one cell of the triangle or square;
+\item[$f^{(c)}_{L}(v)$] denote the \emph{selected} (volume-weighted) age-to-age factor from lag
+  $L$ to $L+1$, computed for company $c$ using only data observable as of valuation year $v$;
+\item[$g^{(c)}_{L}(v)$] denote the \emph{age-to-lag} (age-to-ultimate, with ``ultimate'' defined
+  as lag 10) factor at lag $L$, computed as of valuation year $v$.
+\end{itemize}
+The explicit dependence on $v$ is essential: because of the walk-forward design of
+Section~\ref{sec:walkforward}, the \emph{same} company and the \emph{same} development lag are
+observed with \emph{different} factor values at different points in the walk, since each point
+recomputes $f$ and $g$ using only the data legitimately available as of that particular $v$ (no
+look-ahead). Superscript $(c)$ denotes a company-specific quantity computed from that company's own
+triangle; superscript $(I)$ denotes the identical calculation performed on the \emph{industry
+triangle}, defined as the cellwise sum of $P^{(c)}_{a,L}$ across all 143 companies.
+
+\subsection{Individual and Selected (Volume-Weighted) Age-to-Age Factors}
+
+For a triangle (company-specific or industry) observed as of valuation year $v$, the
+\emph{individual} age-to-age factor for accident year $a$ at lag $L \to L+1$ is
+$P_{a,L+1} / P_{a,L}$, defined whenever both cells are observed ($a + L - 1 \le v$ and
+$a + L \le v$). The \emph{selected} factor used throughout this project is the
+\emph{volume-weighted average} (the industry-standard ``all-year volume-weighted'' selection,
+consistent with $\texttt{factor\_average} = \texttt{"volume"}$ in the codebase), not a simple
+average of individual factors:
+\begin{equation}
+f_{L}(v) \;=\; \frac{\displaystyle\sum_{a \,:\, a+L \le v} P_{a,L+1}}{\displaystyle\sum_{a \,:\, a+L \le v} P_{a,L}}
+\label{eq:selected-factor}
+\end{equation}
+i.e., the sum of all next-lag cumulative paid amounts across every accident year that has reached
+lag $L+1$ as of $v$, divided by the sum of the corresponding current-lag amounts. This weights
+larger accident years more heavily than smaller ones, which is the standard justification for
+volume weighting over a simple average of ratios.
+
+\subsection{Age-to-Lag (Age-to-Ultimate) Factors}
+
+The age-to-lag factor at lag $L$ is the cumulative product of selected factors from $L$ up to the
+final lag (10, treated as ``ultimate'' within this 10-lag window):
+\begin{equation}
+g_{L}(v) \;=\; \prod_{j=L}^{9} f_{j}(v), \qquad g_{10}(v) = 1.
+\label{eq:age-to-lag}
+\end{equation}
+Equivalently, and as implemented, $g_L(v)$ is built by a backward recursion starting from
+$g_{10}(v)=1$ and repeatedly multiplying in $f_{L}(v)$ while stepping $L$ down from 9 to 1.
+
+\subsection{Reserve and Ultimate Estimation}
+
+For accident year $a$ observed as of valuation year $v$, let $L = v-a+1$ be its currently observed
+lag and $P_{a,L}$ its last observed cumulative paid loss. The chain-ladder point estimate of
+ultimate (lag-10) cumulative paid loss, and the implied reserve, are:
+\begin{align}
+\widehat{P}_{a,10}(v) &= P_{a,L} \cdot g_{L}(v) \label{eq:estimate}\\
+\widehat{\text{Reserve}}_a(v) &= \widehat{P}_{a,10}(v) - P_{a,L}. \label{eq:reserve}
+\end{align}
+
+\subsection{Two Pattern Sources: Company versus Industry}
+
+Every quantity above is computed twice per accident year: once using $g_L^{(c)}(v)$, the
+development factors from company $c$'s own triangle (\texttt{pattern\_source = "company"}), and
+once using $g_L^{(I)}(v)$, the identical calculation applied to the pooled industry triangle
+(\texttt{pattern\_source = "industry"}). Both use the \emph{same} last observed paid amount
+$P_{a,L}$ (the company's own), so the two estimates differ only through the choice of development
+factor.
+
+%==============================================================================
+\section{Credibility-Weighted Blending}
+\label{sec:blend}
+%==============================================================================
+
+For each company $c$ and development lag $L$, a blend ratio $r_{c,L} \in [0,1]$ is fit (Section
+\ref{sec:optimization}) and used to form a credibility-weighted age-to-lag factor:
+\begin{equation}
+g_{L}^{(c,\text{blend})} \;=\; r_{c,L}\, g_{L}^{(c)} \;+\; \bigl(1-r_{c,L}\bigr)\, g_{L}^{(I)}.
+\label{eq:blend-factor}
+\end{equation}
+This is the standard linear credibility form, with $r_{c,L}$ playing the role of the classical
+credibility factor $Z$ (Appendix~\ref{app:buhlmann}): $r_{c,L}=1$ means full credibility is given
+to the company's own pattern, $r_{c,L}=0$ means the company's own pattern is disregarded entirely
+in favor of the industry pattern, and intermediate values are a linear interpolation. The blended
+ultimate estimate and reserve follow directly by substituting Eq.~\eqref{eq:blend-factor} into
+Eqs.~\eqref{eq:estimate}--\eqref{eq:reserve}:
+\begin{equation}
+\widehat{P}_{a,10}^{\text{blend}} = P_{a,L} \cdot g_{L}^{(c,\text{blend})}, \qquad
+\widehat{\text{Reserve}}_a^{\text{blend}} = \widehat{P}_{a,10}^{\text{blend}} - P_{a,L}.
+\label{eq:blend-estimate}
+\end{equation}
+Because $r_{c,L}$ is fit once per development lag from historical (out-of-sample) backtest data
+(Section~\ref{sec:walkforward}) and then \emph{applied}, unchanged, to the target valuation year
+(2007), Eq.~\eqref{eq:blend-estimate} at the target year is a genuine out-of-sample forecast, not a
+refit -- a point of some consequence, returned to in Section~\ref{sec:casestudies}.
+Two ratios are fit and carried in parallel throughout -- $\rmae_{c,L}$ (MAE-optimal) and
+$\rrmse_{c,L}$ (RMSE-optimal) -- since the two loss functions can, and empirically do, disagree.
+
+%==============================================================================
+\section{Walk-Forward (Rolling-Origin) Backtesting Design}
+\label{sec:walkforward}
+%==============================================================================
+
+\subsection{Motivation: Degeneracy of a Single Valuation Date}
+
+At a single, fixed valuation year $v_0$ (e.g., 2007), the mapping from accident year to observed
+lag, $L = v_0 - a + 1$, is a bijection: each accident year lands at exactly one lag, and each lag
+is populated by exactly one accident year. Fitting a blend ratio $r_L$ per lag from a single
+valuation date therefore means fitting one free parameter from exactly one data point per lag --
+an exact, degenerate fit with zero residual degrees of freedom and no ability to distinguish
+signal from noise.
+
+\subsection{Construction: Walking the Valuation Date Forward}
+
+To obtain multiple independent observations per lag, the valuation date is walked forward one
+year at a time, from $v = a_0 + 1$ (where $a_0$ is the company's first observed accident year --
+the earliest valuation date at which two development lags exist to form even one age-to-age
+factor) through the target valuation year $v^\star = 2007$, inclusive. At each step $v$ in this
+walk:
+\begin{enumerate}
+\item The triangle (company and industry) is rebuilt using \emph{only} cells with
+  $a + L - 1 \le v$ -- i.e., properly censored as of that historical valuation date, with no
+  information from calendar years after $v$ used in the factor calculation;
+\item Selected factors $f_{L}(v)$ and age-to-lag factors $g_L(v)$ are recomputed from this
+  $v$-censored triangle (Eqs.~\ref{eq:selected-factor}--\ref{eq:age-to-lag});
+\item Every accident year $a$ observable as of $v$ contributes one row, tagged with
+  $L = v-a+1$ and with $v$ itself, to a pooled table;
+\item The row's \texttt{actual\_paid} field is populated from the \emph{square} (the true,
+  eventually-disclosed lag-10 value for that accident year -- Section~\ref{sec:square}), used
+  purely for later grading and never as a model input.
+\end{enumerate}
+Only the terminal step ($v = v^\star$) is persisted to disk as a deliverable; every earlier step
+is transient backtest scratch work. This produces, for the \emph{same} accident year, one
+observation per valuation year it lived through (at a different lag each time), and for the
+\emph{same} lag, one observation per valuation year in the walk (from a different accident year
+each time) -- exactly the cross-classification structure needed to fit a per-lag ratio from
+multiple genuinely independent historical points.
+
+\subsection{Concrete Worked Mapping}
+
+For company 43, development lag $L=6$ is fed by accident years $\{1998,1999,2000,2001,2002\}$,
+each paired with the valuation year at which it first reached lag 6 ($v = a+5$):
+\begin{equation}
+(a,v) \in \bigl\{(1998,2003),\,(1999,2004),\,(2000,2005),\,(2001,2006),\,(2002,2007)\bigr\}
+\end{equation}
+-- five independent $(a,v)$ pairs, five independently-computed pairs of company/industry factors
+(each computed from that pair's own $v$-censored triangle), and five independent actual-vs-estimate
+residuals feeding the fit for $r_{43,6}$.
+
+\subsection{Achieved Sample Sizes}
+
+Because the walk has a fixed length (bounded by the number of valuation years between a company's
+first usable valuation date and 2007) and a fixed number of lags, observation counts shrink near
+the boundary lags (very early or very late lags have fewer valid $(a,v)$ pairs within the walk).
+Pooling every $(\text{company}, L)$ combination across all 112 successfully processed companies
+gives $1{,}120$ rows in total, with the following distribution of \texttt{num\_observations} (the
+count of $(a,v)$ pairs backing that row's fit):
+
+\begin{table}[h]
+\centering
+\caption{Distribution of backtest observation counts across all 1{,}120 pooled (company, lag) rows}
+\begin{tabular}{lrrrrrrrrr}
+\toprule
+num\_observations & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 \\
+\midrule
+Count of rows & 114 & 127 & 120 & 130 & 109 & 108 & 112 & 102 & 198 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Rows with \texttt{num\_observations} $=1$ are, by construction, an exact fit to a single historical
+point and are treated as unreliable; all cross-sectional analyses in
+Sections~\ref{sec:crosssection}--\ref{sec:volatility} exclude them, retaining $1{,}120-114=1{,}006$
+rows.
+
+%==============================================================================
+\section{Exact Optimization of the Blend Ratio}
+\label{sec:optimization}
+%==============================================================================
+
+\subsection{Error as an Affine Function of $r$}
+
+Fix a company $c$ and development lag $L$, with pooled backtest observations indexed
+$n = 1, \dots, N$ (each an $(a_n, v_n)$ pair with $v_n - a_n + 1 = L$). Write $P_n$ for that
+observation's last observed paid amount, $g^{(c)}_n$ and $g^{(I)}_n$ for its (point-in-time)
+company and industry age-to-lag factors, and $A_n$ for its true eventual (lag-10) paid amount
+from the square. The blended estimate and its error as a function of the blend weight $r$ are:
+\begin{align}
+\widehat{P}_n(r) &= P_n \bigl[ r\, g^{(c)}_n + (1-r)\, g^{(I)}_n \bigr] \notag \\
+e_n(r) &\equiv \widehat{P}_n(r) - A_n
+       = \underbrace{\bigl(P_n g^{(I)}_n - A_n\bigr)}_{b_n} \;+\; r\underbrace{\Bigl(P_n\bigl(g^{(c)}_n - g^{(I)}_n\bigr)\Bigr)}_{x_n}
+       = b_n + r\, x_n,
+\label{eq:affine-error}
+\end{align}
+where $b_n$ is the error at $r=0$ (pure industry) and $x_n$ is the sensitivity of the error to
+$r$ -- the gap between the company-only and industry-only point estimates. Every error is
+therefore an affine (linear) function of the single scalar $r$, which is what makes both loss
+functions below exactly, rather than only numerically, optimizable.
+
+\subsection{RMSE: Closed-Form Quadratic Minimizer}
+
+Since $e_n(r) = b_n + r x_n$ is affine, $\sum_n e_n(r)^2$ is a quadratic, upward-opening
+(convex) parabola in $r$:
+\begin{equation}
+S(r) = \sum_{n=1}^{N} (b_n + r x_n)^2 = \sum_n b_n^2 \;+\; 2r\sum_n x_n b_n \;+\; r^2 \sum_n x_n^2.
+\end{equation}
+Differentiating and setting to zero:
+\begin{equation}
+\frac{dS}{dr} = 2\sum_n x_n b_n + 2r\sum_n x_n^2 = 0
+\;\;\Longrightarrow\;\;
+r^\star = -\frac{\sum_n x_n b_n}{\sum_n x_n^2},
+\label{eq:rmse-star}
+\end{equation}
+with $\dfrac{d^2S}{dr^2} = 2\sum_n x_n^2 \ge 0$ confirming $r^\star$ is a global minimum whenever
+$\sum_n x_n^2 > 0$ (if $\sum_n x_n^2 = 0$, every observation has $g^{(c)}_n = g^{(I)}_n$ and the
+loss does not depend on $r$ at all). Since $r$ must remain a valid convex-combination weight, the
+final RMSE-optimal ratio clips $r^\star$ to the unit interval:
+\begin{equation}
+\rrmse_{c,L} = \operatorname{clip}(r^\star,\,0,\,1), \qquad
+\text{RMSE}\bigl(\rrmse_{c,L}\bigr) = \sqrt{\tfrac{1}{N}\textstyle\sum_n \bigl(b_n + \rrmse_{c,L}\, x_n\bigr)^2}.
+\label{eq:rmse-clip}
+\end{equation}
+
+\subsection{MAE: Convex Piecewise-Linear Minimizer}
+
+$\text{MAE}(r) = \tfrac{1}{N}\sum_n |b_n + r x_n|$ is a sum of $N$ convex, piecewise-linear
+(``V-shaped'') functions of $r$ -- each term $|b_n + r x_n|$ has its single non-differentiable
+kink (and, taken alone, its minimum) at $r = -b_n/x_n$ (undefined, i.e. constant in $r$, when
+$x_n=0$). A finite sum of convex piecewise-linear functions is itself convex and piecewise-linear,
+and the slope of a convex piecewise-linear function is non-decreasing in $r$; consequently its
+minimum over an interval is attained either at one of the constituent kinks or at a boundary of
+the interval. This yields an exact, finite candidate set:
+\begin{equation}
+\mathcal{C} = \{0,\,1\} \;\cup\; \bigl\{\operatorname{clip}(-b_n/x_n,\,0,\,1) : x_n \ne 0\bigr\},
+\label{eq:mae-candidates}
+\end{equation}
+and the exact minimizer is found by direct evaluation:
+\begin{equation}
+\rmae_{c,L} = \argmin_{r\, \in\, \mathcal{C}} \ \frac{1}{N}\sum_{n=1}^N \bigl|b_n + r x_n\bigr|.
+\label{eq:mae-argmin}
+\end{equation}
+No grid search or iterative solver is used for either loss function; both are exact given
+Eqs.~\eqref{eq:rmse-clip} and \eqref{eq:mae-candidates}--\eqref{eq:mae-argmin}.
+
+\subsection{Fully Worked Numerical Example}
+\label{sec:worked-example}
+
+Company 43, development lag $L=9$, has $N=2$ pooled observations:
+
+\begin{table}[h]
+\centering
+\caption{Company 43, lag 9: the two pooled walk-forward observations}
+\begin{tabular}{lrrrrrr}
+\toprule
+$a_n$ & $v_n$ & $P_n$ & $g^{(c)}_n$ & $g^{(I)}_n$ & $A_n$ & \\
+\midrule
+1998 & 2006 & 39{,}876 & 1.000000 & 1.000000 & 39{,}896 & \\
+1999 & 2007 & 45{,}090 & 1.000502 & 1.001645 & 45{,}092 & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Applying Eq.~\eqref{eq:affine-error}:
+\begin{align*}
+x_1 &= 39{,}876\,(1.000000 - 1.000000) = 0, &
+b_1 &= 39{,}876(1.000000) - 39{,}896 = -20.000,\\
+x_2 &= 45{,}090\,(1.000502 - 1.001645) = -51.549, &
+b_2 &= 45{,}090(1.001645) - 45{,}092 = 72.164.
+\end{align*}
+\textbf{RMSE:} $\sum x_n b_n = (0)(-20.000)+(-51.549)(72.164) = -3720.02$;
+$\sum x_n^2 = 0^2 + (-51.549)^2 = 2657.33$; so
+$r^\star = -(-3720.02)/2657.33 = 1.3999$, clipped to $\rrmse_{43,9}=1.0$, giving
+$\text{RMSE}(1.0) = \sqrt{\tfrac{1}{2}\bigl[(-20.0)^2 + (72.164-51.549)^2\bigr]} = \sqrt{412.51} = 20.310$.
+
+\textbf{MAE:} the candidate set is $\{0,1\}$ (observation 1 contributes no kink since $x_1=0$;
+observation 2's kink at $-b_2/x_2 = 1.400$ clips to the existing candidate 1). Evaluating:
+$\text{MAE}(0) = \tfrac12(|{-20.0}|+|72.164|) = 46.082$;
+$\text{MAE}(1) = \tfrac12(|{-20.0}|+|72.164-51.549|) = \tfrac12(20.0+20.615)=20.308$.
+So $\rmae_{43,9} = 1.0$ as well, with $\text{MAE}=20.308$. In this instance both loss functions
+agree that the company's own pattern should be fully trusted at this lag -- driven almost entirely
+by observation 2, since observation 1 is uninformative about $r$ ($x_1=0$: company and industry
+factors coincided exactly that year).
+
+%==============================================================================
+\section{Single-Company Case Studies}
+\label{sec:casestudies}
+%==============================================================================
+
+\subsection{Company 43: Lag-to-Lag Instability of the Fitted Ratio}
+
+Company 43's fitted RMSE-optimal ratio by lag illustrates that the fit is rarely a smooth function
+of $L$:
+
+\begin{table}[h]
+\centering
+\caption{Company 43: RMSE-optimal ratio and backing sample size, by development lag}
+\begin{tabular}{lrrrrrrrrrr}
+\toprule
+Lag $L$ & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 & 10 \\
+\midrule
+$N$ & 9 & 9 & 8 & 7 & 6 & 5 & 4 & 3 & 2 & 1 \\
+$\rrmse$ & 0.664 & 0.510 & 0.153 & 0.488 & 1.000 & 0.902 & 0.504 & 1.000 & 1.000 & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The ratio bounces between the interior and both boundaries as $L$ decreases -- symptomatic of the
+declining sample size $N$ toward the higher lags (and toward $L=1$'s inherently thinner support):
+with as few as 2--3 observations, $r^\star$ in Eq.~\eqref{eq:rmse-star} is determined almost
+entirely by whichever single historical year had the largest residual, and RMSE loss (quadratic)
+amplifies that single year's influence more than MAE loss (linear) would.
+
+\subsection{Company 40568: The Convex-Combination Bound}
+\label{sec:convex-bound}
+
+A structural limit on how close \emph{any} blend can get to the actual outcome follows directly
+from Eq.~\eqref{eq:blend-factor}: because $\widehat{P}^{\text{blend}} = r\,\widehat{P}^{(c)} +
+(1-r)\,\widehat{P}^{(I)}$ is a convex combination (weights in $[0,1]$ summing to 1) of the two
+single-source estimates, it must satisfy
+\begin{equation}
+\min\bigl(\widehat{P}^{(c)}, \widehat{P}^{(I)}\bigr) \;\le\; \widehat{P}^{\text{blend}} \;\le\;
+\max\bigl(\widehat{P}^{(c)}, \widehat{P}^{(I)}\bigr) \qquad \text{for every } r \in [0,1].
+\label{eq:convex-bound}
+\end{equation}
+Whenever the actual outcome $A$ falls outside this interval, \emph{no} choice of $r$ can bring
+the blended estimate closer than the nearer of the two boundary endpoints -- this is not a
+deficiency of the optimizer but a geometric fact about weighted averages. For company 40568,
+accident year 2002 ($L=6$): the company-only estimate is $1374.73$, the industry-only estimate is
+$1399.07$, and the true actual paid is $1472.00$ -- outside $[1374.73,1399.07]$ on the high side.
+The RMSE-optimal fit correctly identifies $r=0$ (pure industry, distance $73.0$) as strictly
+better than $r=1$ (pure company, distance $97.3$), which is the closest \emph{any} value of $r$
+can get. The same pattern recurs at accident year 2005 ($L=3$): company-only $=1373.50$,
+industry-only $=1369.89$, actual $=1203$ -- again outside the interval, this time on the low side,
+with $r=0$ again marginally closer. Both cases reflect a genuine single-year anomaly in the
+company's realized claims experience that neither a company-specific nor an industry-wide smoothed
+development pattern can anticipate; no credibility weighting scheme built from Eq.~\eqref{eq:blend-factor}
+can correct for it.
+
+\subsection{Company 41700 and the Thin-History Flag}
+\label{sec:thin}
+
+Company 41700 (Southern Group Ind Inc) has recorded private-passenger-auto data for accident
+years 1998 and 1999 only -- a full $10\times2$ block of development lags is present, but only two
+accident-year cohorts exist at all. Every development lag's backtest fit therefore draws on at
+most $N=2$ observations (and $N=1$ at the two most extreme lags), with several lags' ratios
+landing exactly at $0$ or $1$ purely because two points admit no interior optimum under a
+convex/piecewise-linear objective unless the interior point exactly minimizes both residuals
+jointly. As described in Section~\ref{sec:population}, this company is flagged
+(\texttt{thin\_history\_flag=True}, $\texttt{num\_accident\_years}=2$) both in the saved results
+data and, prominently, on the rendered comparison chart.
+
+%==============================================================================
+\section{Cross-Sectional Analysis: Fitted Credibility versus Company Size}
+\label{sec:crosssection}
+%==============================================================================
+
+\subsection{Company Share of Industry}
+
+For each pooled $(\text{company } c, \text{lag } L)$ row, a size proxy is computed as the mean,
+across that row's $N$ backing observations, of the company's share of total industry paid losses
+at the matching cross-section:
+\begin{equation}
+\text{share}_{c,L} = \frac{1}{N}\sum_{n=1}^{N} \frac{P_n^{(c)}}{P_n^{(I,\text{total})}},
+\label{eq:share}
+\end{equation}
+where $P_n^{(I,\text{total})}$ is the \emph{industry-wide} (sum across all 143 companies) last
+observed cumulative paid loss at the same accident year and lag as observation $n$. This is a
+paid-loss-based size proxy, distinct from (though correlated with) the premium-based concentration
+figures of Section~\ref{sec:population}.
+
+\subsection{Pooling and Reliability Filter}
+
+Every company with a saved weighting-by-lag file (112 companies, up to 10 rows each) contributes
+to a single pooled table of $1{,}120$ $(\text{company},L)$ rows (Section~\ref{sec:walkforward}).
+Rows with $\texttt{num\_observations} < 2$ are excluded as unreliable (an exact fit to one point
+carries no information about generalization), leaving $n=1{,}006$ rows for correlation analysis.
+Over this reliable subset, $\text{share}_{c,L}$ ranges from $4.7\times10^{-7}$ to $0.742$ (median
+$3.79\times10^{-4}$), a span of nearly six orders of magnitude.
+
+\subsection{Corner-Clustering of the Fitted Ratio}
+
+Among the 1{,}006 reliable rows, $\rmae$ sits at exactly $0$ for $231$ rows and exactly $1$ for
+$344$ rows ($575/1006 = 57.2\%$ at a boundary); $\rrmse$ sits at exactly $0$ for $233$ and exactly
+$1$ for $293$ ($526/1006=52.3\%$). This is a direct consequence of the optimizers derived in
+Section~\ref{sec:optimization}: with $N$ typically in the single digits, the unconstrained RMSE
+optimum in Eq.~\eqref{eq:rmse-star} frequently falls outside $[0,1]$ and is clipped, and the MAE
+candidate set of Eq.~\eqref{eq:mae-candidates} frequently has its minimum at a boundary rather
+than an interior kink.
+
+\subsection{Correlation Measures}
+
+Three correlation statistics are reported, each making a different assumption about the
+relationship being tested:
+
+\begin{itemize}
+\item \textbf{Pearson $r$} assumes an approximately linear relationship between the two variables
+  and is highly sensitive to both extreme skew in the independent variable (here, share spans six
+  orders of magnitude) and to a dependent variable dominated by two repeated boundary values
+  (here, the corner-clustering above), since it is fundamentally a measure of \emph{linear}
+  co-movement.
+\item \textbf{Spearman $\rho$} is the Pearson correlation computed on ranks (with tie-averaging),
+  and detects any \emph{monotonic} (not necessarily linear) relationship, making it robust to the
+  extreme skew in share but only partially robust to heavy tying in $r$.
+\item \textbf{Kendall's $\tau_b$} is a concordant/discordant-pair statistic explicitly corrected
+  for ties (the ``$b$'' variant, \texttt{scipy}'s default), making it the most appropriate of the
+  three given that over half of $r$'s values are exact ties at $0$ or $1$.
+\end{itemize}
+
+\subsection{Results}
+
+\begin{table}[h]
+\centering
+\caption{Correlation between company share of industry paid losses and fitted credibility ratio ($n=1{,}006$)}
+\begin{tabular}{lrrrrrr}
+\toprule
+Ratio & Pearson $r$ & $p$ & Spearman $\rho$ & $p$ & Kendall $\tau_b$ & $p$ \\
+\midrule
+$\rmae$  & 0.0239  & 0.449 & 0.1288 & $4.17\times10^{-5}$ & 0.0929 & $3.64\times10^{-5}$ \\
+$\rrmse$ & $-$0.0015 & 0.963 & 0.1060 & $7.57\times10^{-4}$ & 0.0769 & $5.49\times10^{-4}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The Pearson coefficients are statistically indistinguishable from zero for both loss functions.
+The rank-based statistics, in contrast, are small in magnitude but highly statistically
+significant: a genuine, if weak, monotonic relationship between company size and fitted
+credibility exists and is detectable only by measures robust to corner-clustering and skew --
+Pearson correlation alone would lead an analyst to conclude, incorrectly, that no relationship
+exists at all.
+
+\subsection{Decile-Binned Credibility Curve}
+
+As a complementary, assumption-light view, companies are grouped into ten equal-frequency bins
+(deciles) of $\text{share}_{c,L}$ via quantile binning, and the mean and median fitted ratio are
+computed within each bin ($n \approx 100$--$101$ per bin):
+
+\begin{table}[h]
+\centering
+\caption{Mean and median fitted ratio by company-size decile (1 = smallest 10\% by share, 10 = largest)}
+\begin{tabular}{lrrrrrr}
+\toprule
+& \multicolumn{3}{c}{$\rmae$} & \multicolumn{3}{c}{$\rrmse$} \\
+\cmidrule(lr){2-4} \cmidrule(lr){5-7}
+Decile & mean & median & $n$ & mean & median & $n$ \\
+\midrule
+1  & 0.675 & 1.000 & 101 & 0.629 & 0.842 & 101 \\
+2  & 0.514 & 0.555 & 101 & 0.532 & 0.657 & 101 \\
+3  & 0.598 & 0.853 & 100 & 0.545 & 0.699 & 100 \\
+4  & 0.532 & 0.655 & 101 & 0.516 & 0.554 & 101 \\
+5  & 0.540 & 0.632 & 100 & 0.549 & 0.628 & 100 \\
+6  & 0.586 & 0.662 & 101 & 0.554 & 0.654 & 101 \\
+7  & 0.581 & 0.655 & 100 & 0.641 & 0.784 & 100 \\
+8  & 0.663 & 0.914 & 101 & 0.664 & 0.894 & 101 \\
+9  & 0.670 & 0.911 & 100 & 0.622 & 0.861 & 100 \\
+10 & 0.816 & 1.000 & 101 & 0.776 & 0.949 & 101 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The pattern is not a clean monotone increase: both metrics are elevated at the extremes (decile 1
+and deciles 8--10) relative to the middle deciles (2--7), an approximately ``smile''-shaped curve,
+though with local bumpiness (e.g., decile 3 partially rebounds within the low-share region).
+More informative than the mean/median levels themselves is the \emph{gap} between them within a
+decile: a decile whose median sits at an exact boundary ($0$ or $1$) while its mean sits well
+below/above indicates a \emph{polarized} population -- most companies in that decile are fully
+trusted or fully distrusted, with the mean simply averaging across the two extremes -- as opposed
+to a decile where mean and median are close together (a genuinely middling, unpolarized group).
+Under $\rmae$, the largest mean--median gaps occur at decile 1 ($|0.675-1.000|=0.325$), decile 3
+($0.256$), decile 8 ($0.251$), and decile 9 ($0.240$); the smallest occur at decile 2 ($0.041$)
+and decile 7 ($0.074$). Decile 1 (the smallest companies) and decile 10 (the largest) are both
+elevated and both polarized, but the middle deciles are not uniformly the least polarized either --
+this nuance is invisible to a single correlation coefficient and is precisely the reason this
+decile view is reported alongside Table~4.
+
+%==============================================================================
+\section{Volatility Analysis}
+\label{sec:volatility}
+%==============================================================================
+
+\subsection{Motivation}
+
+Every model in this project (company-only, industry-only, or blended) is a smoothed multiplicative
+extrapolation of historical development. Such an extrapolation can only track a claims process
+that itself behaves in a reasonably stable, patterned way; it cannot anticipate idiosyncratic,
+noise-driven swings. This motivates a direct measure of how ``volatile'' or ``zigzag'' each
+company's realized loss experience is, independent of company size, to test whether volatility --
+rather than size per se -- is the more fundamental driver of both prediction error and fitted
+credibility, consistent with the process-variance basis of classical credibility theory (a higher
+process variance requires more observations, or equivalently receives lower credibility, before
+full credibility is warranted; see Appendix~\ref{app:buhlmann}).
+
+\subsection{Definition}
+
+For company $c$, let $A_{c,1}, \dots, A_{c,T}$ ($T\le10$) be its ultimate (lag-10, fully matured)
+actual paid loss, one value per accident year, sorted by accident year -- the same figures used as
+grading truth throughout this report. Define the year-over-year relative change
+\begin{equation}
+\gamma_{c,t} = \frac{A_{c,t} - A_{c,t-1}}{A_{c,t-1}}, \qquad t=2,\dots,T,
+\label{eq:growth}
+\end{equation}
+and the volatility statistic as the sample standard deviation (Bessel-corrected, divisor $T-2$
+degrees of freedom lost: one for differencing, one for the mean) of the $T-1$ growth values:
+\begin{equation}
+\text{Vol}_c = \sqrt{\frac{1}{T-2}\sum_{t=2}^{T} \bigl(\gamma_{c,t} - \bar\gamma_c\bigr)^2}, \qquad
+\bar\gamma_c = \frac{1}{T-1}\sum_{t=2}^{T}\gamma_{c,t}.
+\label{eq:volatility}
+\end{equation}
+Relative (percentage) change rather than absolute dollar change is used deliberately: company size
+in this dataset spans nearly six orders of magnitude (Section~\ref{sec:population}), so an
+absolute-dollar measure would trivially rank the largest companies as ``most volatile'' regardless
+of their actual relative stability. Companies with fewer than 5 accident years of history, or
+fewer than 3 finite growth observations (after excluding divide-by-zero cases), are excluded,
+leaving $n=105$ companies.
+
+\subsubsection{Worked Example: Company 40568}
+
+Ultimate actual paid by accident year: $1296, 1362, 1224, 1757, 1472, 1447, 1581, 1203, 1336,
+1461$ (1998--2007). Year-over-year growth: $+5.09\%, -10.13\%, +43.55\%, -16.22\%, -1.70\%,
++9.26\%, -23.91\%, +11.06\%, +9.36\%$. Mean growth $\bar\gamma = 2.93\%$; sample standard
+deviation $\text{Vol} = 19.62\%$ -- i.e., growth swings by roughly $\pm20$ percentage points
+around a near-zero average trend, the numerical signature of a ``zigzag'' rather than a smoothly
+growing or shrinking book of business.
+
+\subsection{Volatility versus Prediction Error}
+
+For each of the 105 companies, mean absolute value of the company-only backtest's
+\texttt{error\_percentage} (defined as $100\times(\widehat{P}_{a,10}-A_{a})/A_{a}$, averaged
+across that company's accident years) is correlated against $\text{Vol}_c$:
+
+\begin{table}[h]
+\centering
+\caption{Volatility vs.\ mean absolute company-only error percentage ($n=105$)}
+\begin{tabular}{lrr}
+\toprule
+& coefficient & $p$-value \\
+\midrule
+Pearson $r$  & 0.328 & $6.36\times10^{-4}$ \\
+Spearman $\rho$ & 0.479 & $2.38\times10^{-7}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Both are strongly significant and positive: more volatile companies are, unsurprisingly, harder
+to predict.
+
+\subsection{Volatility versus Company Size}
+
+Merging $\text{Vol}_c$ with each company's mean $\text{share}_{c,L}$ (averaged across its lags,
+share $>0$, $n=105$) gives
+\begin{equation}
+\text{Spearman}\bigl(\text{share}_c,\ \text{Vol}_c\bigr) = -0.683, \qquad p = 9.56\times10^{-16},
+\end{equation}
+a strong negative relationship: larger companies have systematically smoother loss experience.
+The two least volatile companies in the dataset are State Farm Mut Grp ($\text{Vol}=0.049$) and
+United Services Automobile Assn Grp ($\text{Vol}=0.029$) -- the two largest companies by premium
+(Section~\ref{sec:population}) -- consistent with a law-of-large-numbers explanation: a larger,
+more diversified book of policies averages out individual-claim-level randomness, while a small
+company's aggregate paid losses are dominated by whichever handful of claims happen to occur in a
+given year.
+
+\begin{table}[h]
+\centering
+\caption{Most and least volatile companies ($n=105$, $\ge5$ accident years)}
+\begin{tabular}{lrrr}
+\toprule
+Company code & Accident years & $\text{Vol}_c$ & Mean $|$error\%$|$ \\
+\midrule
+\multicolumn{4}{l}{\textit{Most volatile}} \\
+26808 & 10 & 7.919 & 17.81\% \\
+32743 & 7  & 1.711 & 2.91\% \\
+32387 & 10 & 1.577 & 4.00\% \\
+10308 & 10 & 1.556 & 12.09\% \\
+13528 & 10 & 1.003 & 5.13\% \\
+\midrule
+\multicolumn{4}{l}{\textit{Least volatile}} \\
+2003 (USAA) & 10 & 0.029 & 1.41\% \\
+1090 (KY Farm Bureau) & 10 & 0.046 & 0.48\% \\
+1767 (State Farm) & 10 & 0.049 & 0.29\% \\
+620 & 10 & 0.059 & 2.20\% \\
+6947 (Tenn Farmers Mut) & 10 & 0.064 & 0.75\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Volatility versus the Fitted Ratio Directly}
+
+Merging $\text{Vol}_c$ (one value per company) onto the pooled $(\text{company},L)$ table
+(restricted to the 105 companies with a defined volatility statistic, $\texttt{num\_observations}
+\ge 2$, $n=945$ rows) and correlating directly against the fitted ratio itself:
+
+\begin{table}[h]
+\centering
+\caption{Volatility vs.\ fitted ratio ($n=945$ rows, 105 companies)}
+\begin{tabular}{lrrrrrr}
+\toprule
+Ratio & Pearson $r$ & $p$ & Spearman $\rho$ & $p$ & Kendall $\tau_b$ & $p$ \\
+\midrule
+$\rmae$  & $-$0.0749 & 0.0213 & $-$0.0447 & 0.170 & $-$0.0313 & 0.178 \\
+$\rrmse$ & $-$0.0849 & 0.00905 & $-$0.0229 & 0.482 & $-$0.0161 & 0.483 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The sign is in the direction credibility theory predicts (higher volatility, lower fitted
+credibility) but the relationship is weak, and only the Pearson statistic clears conventional
+significance thresholds -- the opposite significance pattern from the size analysis of
+Section~\ref{sec:crosssection}, where the rank-based statistics were the significant ones. The
+most likely explanation is a mismatch of granularity: $\text{Vol}_c$ is a single scalar per
+company, whereas the fitted ratio varies substantially \emph{within} a company across development
+lags (Section~\ref{sec:casestudies}, Table~3, shows company 43's $\rrmse$ ranging from $0.153$ to
+$1.000$ across lags). Pairing one company-level number against many lag-level outcomes for that
+same company leaves most of the ratio's within-company variance unexplained by a between-company
+statistic, diluting the correlation relative to volatility's much stronger relationship with
+\emph{error magnitude} (Table~7), which is measured at the same company-level granularity as
+$\text{Vol}_c$ itself.
+
+%==============================================================================
+\section{Discussion: How the Data Source Shapes These Results}
+\label{sec:discussion}
+%==============================================================================
+
+Three properties of the underlying data recur across every analysis above and plausibly explain
+why the size-credibility relationship is real but weak rather than strong:
+
+\begin{enumerate}
+\item \textbf{Extreme concentration.} With 92\% of industry premium held by 10 companies
+  (Section~\ref{sec:population}) and company share of paid losses spanning nearly six orders of
+  magnitude (Section~\ref{sec:crosssection}), any linear-correlation measure (Pearson) is
+  structurally disadvantaged; only rank-based or binned views recover the signal.
+\item \textbf{Thin per-lag samples.} A third of all pooled (company, lag) rows are backed by three
+  or fewer walk-forward observations (Table~2); with so few points, both exact optimizers
+  (Section~\ref{sec:optimization}) are prone to landing at a boundary ($r=0$ or $r=1$) driven by a
+  single influential historical year rather than a stable underlying pattern -- the corner-clustering
+  documented in Section~\ref{sec:crosssection} is a small-sample artifact layered on top of
+  whatever genuine credibility signal exists.
+\item \textbf{Single line, single geography, single ten-year window.} Private passenger auto is a
+  comparatively short-tailed, well-behaved line; the industry-wide pattern is already a reasonably
+  good predictor for most companies, which mechanically compresses how much room company size has
+  left to explain in the residual credibility decision.
+\end{enumerate}
+
+%==============================================================================
+\section{Limitations and Suggested Extensions}
+\label{sec:limitations}
+%==============================================================================
+
+\begin{itemize}
+\item \textbf{Unregularized point estimation.} $\rmae_{c,L}$ and $\rrmse_{c,L}$ are exact optima
+  of Eqs.~\eqref{eq:rmse-clip} and \eqref{eq:mae-argmin} with no penalty for small $N$; a natural
+  extension is to shrink the fitted ratio toward a prior (e.g., $0.5$, or a value smoothed across
+  neighboring lags) in proportion to $1/N$ or a similar precision-weighted rule, in the spirit of
+  limited-fluctuation or Bühlmann-Straub credibility (Appendix~\ref{app:buhlmann}), rather than
+  trusting the unconstrained closed-form optimum at face value when $N$ is small.
+\item \textbf{Out-of-sample generalization gap.} The fitted ratio is estimated entirely from
+  valuation years prior to (or including, at the oldest backing accident year of each lag) the
+  target year and then applied unchanged to 2007; no refitting occurs at the target year itself.
+  This is methodologically correct for backtesting purposes but means the target-year blended
+  estimate can miss by construction whenever 2007's realized experience differs from the historical
+  average the ratio was fit to -- illustrated numerically in Section~\ref{sec:convex-bound}.
+\item \textbf{No formal parametric credibility comparison.} This project fits $r$ empirically
+  rather than via a parametric variance-components model (Bühlmann or Bühlmann-Straub); a natural
+  extension is to compute the classical credibility factor $Z$ (Appendix~\ref{app:buhlmann}) from
+  the same walk-forward panel and compare it directly against $\rmae$/$\rrmse$.
+\item \textbf{Single-country, single-line scope.} All conclusions are specific to U.S.\ private
+  passenger auto, 1998--2007; generalization to longer-tailed lines (general liability, workers'
+  compensation) or other geographies is untested and, per Section~\ref{sec:discussion}, plausibly
+  different given how much this line's short-tailed behavior compresses the residual credibility
+  signal.
+\end{itemize}
+
+%==============================================================================
+\section{Conclusion}
+%==============================================================================
+
+An empirically-fit credibility blend between company and industry paid chain-ladder development
+factors, backtested via a rigorous walk-forward design with $1{,}006$ reliable (company,
+development-lag) observations across 112 companies, shows a statistically significant but weak
+positive rank correlation between company size and fitted credibility (Spearman $\rho \approx
+0.11$--$0.13$), undetectable by Pearson correlation alone due to heavy boundary-clustering of the
+fitted ratio. A directly measured volatility statistic explains substantially more of the
+variation in prediction error (Spearman $\rho=0.479$) and is strongly negatively associated with
+company size (Spearman $\rho=-0.683$), suggesting volatility -- consistent with the process-variance
+foundation of classical credibility theory -- is the more fundamental quantity, with size acting
+largely as its (imperfect) proxy in this dataset. Volatility does not, however, predict the fitted
+ratio's \emph{direction} with comparable strength once measured at matching (company, lag)
+granularity, a gap attributable to substantial within-company variation of the fitted ratio across
+development lags that a single company-level volatility statistic cannot capture.
+
+\appendix
+%==============================================================================
+\section{Classical Bühlmann Credibility Formula (Reference)}
+\label{app:buhlmann}
+%==============================================================================
+
+For contrast with the empirically-fit ratio used throughout this report, the classical linear
+(Bühlmann) credibility factor for a risk observed over $n$ periods is
+\begin{equation}
+Z = \frac{n}{n+K}, \qquad K = \frac{\text{EPV}}{\text{VHM}},
+\end{equation}
+where $\text{EPV}$ (expected value of the process variance) measures the average within-risk
+variance across the population, and $\text{VHM}$ (variance of the hypothetical means) measures how
+much the true mean loss level varies \emph{between} risks. $Z\to1$ as $n\to\infty$ or as
+$\text{VHM}/\text{EPV}\to\infty$ (risks are very heterogeneous, so a given risk's own data is
+highly informative about its own true mean); $Z\to0$ as $\text{EPV}/\text{VHM}\to\infty$ (risks
+are essentially homogeneous, so an individual risk's own data is mostly noise around a common
+mean). This formula was not fit in this project -- the ratio $r_{c,L}$ is instead obtained by
+direct out-of-sample error minimization (Section~\ref{sec:optimization}) -- but the qualitative
+prediction is the same one tested empirically here: a company whose own experience is more
+informative relative to population-level noise (lower process variance, i.e., lower $\text{Vol}_c$)
+should receive a higher credibility weight, exactly the (weak, but correctly-signed) relationship
+found in Section~\ref{sec:volatility}.
+
+%==============================================================================
+\section{Software and Reproducibility}
+%==============================================================================
+
+All computation was performed in Python (pandas, NumPy, SciPy) against a src-layout package,
+\texttt{reserve\_lab}. Key modules: \texttt{manual\_chain\_ladder.py} (Eqs.
+\ref{eq:selected-factor}--\ref{eq:reserve}); \texttt{analysis.py}
+(\texttt{run\_walk\_forward\_backtests}, Section~\ref{sec:walkforward};
+\texttt{\_fit\_ratio}, Section~\ref{sec:optimization}; \texttt{calculate\_best\_ratio},
+Eq.~\ref{eq:share}; \texttt{analyze\_credibility\_vs\_size}, Section~\ref{sec:crosssection});
+\texttt{build\_loss\_structures.py} (triangle/square construction, Section~\ref{sec:square});
+\texttt{compare.py} (all visualization, including the thin-history warning of
+Section~\ref{sec:thin}). Correlation statistics use \texttt{scipy.stats.pearsonr},
+\texttt{spearmanr}, and \texttt{kendalltau} (tau-b variant). All figures in this report were
+recomputed directly from the project's saved CSV outputs
+(\texttt{data/processed/results/*.csv}) at the time of writing.
+
+\end{document}

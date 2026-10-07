@@ -176,11 +176,16 @@ def calculate_individual_factors(loss_triangle: pd.DataFrame)-> pd.DataFrame:
 
         denominator = matched_pairs[current_lag]
         numerator = matched_pairs[next_lag]
-        
-        if denominator.eq(0).any():
-            raise ValueError('Cannot calculate the ' f'{current_lag}-to-{next_lag}', 'because denominator is zero')
-        
-        age_to_age_factor = numerator / denominator
+
+        # a single accident year can genuinely have $0 paid at current_lag
+        # (a quiet year, no claims yet) even though OTHER accident years
+        # for this same company have real data - that one row's
+        # individual factor is just undefined (NaN), not a reason to fail
+        # the whole company. calculate_selected_factors (the one whose
+        # output the rest of start_calculating actually uses) sums across
+        # every accident year before dividing, so it isn't affected by one
+        # zero row the way this per-accident-year version is.
+        age_to_age_factor = numerator / denominator.replace(0, np.nan)
         
         individual_factors[f'{current_lag}_to{next_lag}'] = age_to_age_factor
 

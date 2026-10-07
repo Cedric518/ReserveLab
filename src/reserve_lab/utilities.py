@@ -13,6 +13,14 @@ def get_all_company_codes():
     clean = pd.read_csv(get_clean_data_path())
     return sorted(clean['company_code'].unique().tolist())
 
+#company_code -> company_name for every company in the clean data - one
+#name per code (checked: no company_code maps to more than one distinct
+#company_name), so this is a safe 1:1 lookup. Used anywhere a chart or
+#report needs to show a human-readable name next to the bare code.
+def get_company_names():
+    clean = pd.read_csv(get_clean_data_path())
+    return clean[['company_code', 'company_name']].drop_duplicates().set_index('company_code')['company_name'].to_dict()
+
 #GET PATHS------------------------------------------------------------------------------------------------------------------------------------------------
 # squares, triangles and results are all company-specific (results doubly
 # so - even the "industry pattern" result is still this company's own
